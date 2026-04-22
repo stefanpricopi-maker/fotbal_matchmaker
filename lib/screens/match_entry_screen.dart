@@ -5,6 +5,7 @@ import '../core/simf_exception.dart';
 import '../models/models.dart';
 import '../providers/simf_controller.dart';
 import '../services/ranking_service.dart';
+import 'match_history_screen.dart';
 import '../theme/simf_theme.dart';
 
 /// Stare editabilă pentru un jucător în ecranul post-meci (tally + toggles).
@@ -116,10 +117,50 @@ class _MatchEntryScreenState extends State<MatchEntryScreen> {
       );
 
       if (!mounted) return;
-      Navigator.of(context).popUntil((route) => route.isFirst);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Meci salvat și ratinguri actualizate.')),
+      final goHistory = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Meci salvat'),
+          content: const Text('Ratingurile au fost actualizate.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Gata'),
+            ),
+            FilledButton.icon(
+              onPressed: () => Navigator.pop(ctx, true),
+              icon: const Icon(Icons.history),
+              label: const Text('Vezi istoric'),
+            ),
+          ],
+        ),
       );
+      if (!mounted) return;
+      Navigator.of(context).popUntil((route) => route.isFirst);
+      if (goHistory == true && mounted) {
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => const MatchHistoryScreen(),
+          ),
+        );
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Meci salvat și ratinguri actualizate.'),
+            action: SnackBarAction(
+              label: 'Istoric',
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const MatchHistoryScreen(),
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      }
     } on SimfException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

@@ -41,6 +41,8 @@ class SimfController extends ChangeNotifier {
   String? get lastError => _lastError;
   bool get isLoading => _loading;
 
+  LocalStore get localStore => _local;
+
   /// `true` dacă `Supabase.initialize` a rulat (URL + cheie anonimă).
   bool get hasCloudSync => _supabase.isReady;
 
@@ -61,6 +63,20 @@ class SimfController extends ChangeNotifier {
       // #endregion
       var local = await _local.getPlayers();
       if (_supabase.isReady) {
+        // Best-effort: sincronizează întâi meciurile rămase local (offline-first).
+        try {
+          final pending = await _local.getUnsyncedMatches();
+          for (final m in pending) {
+            final stats = await _local.getStatsForMatch(m.id);
+            await _supabase.insertMatchWithStats(match: m, stats: stats);
+            await _local.markMatchSynced(m.id);
+          }
+        } on SimfException catch (e) {
+          _lastError = e.message;
+        } catch (e) {
+          _lastError = 'Nu s-au putut sincroniza meciurile locale: $e';
+        }
+
         try {
           final remote = await _supabase.fetchPlayers();
           final remoteById = {for (final p in remote) p.id: p};
@@ -196,6 +212,25 @@ class SimfController extends ChangeNotifier {
       throw SimfException('Nu există echipe generate pentru acest meci.');
     }
 
+    final m = Match(
+      id: _uuid.v4(),
+      createdAt: DateTime.now().toUtc(),
+      scoreA: scoreA,
+      scoreB: scoreB,
+    );
+    final withIds = stats
+        .map((s) => MatchPlayerStats(
+              matchId: m.id,
+              playerId: s.playerId,
+              team: s.team,
+              goals: s.goals,
+              saves: s.saves,
+              isRotationGk: s.isRotationGk,
+              receivedMvpVote: s.receivedMvpVote,
+              cleanSheet: s.cleanSheet,
+            ))
+        .toList(growable: false);
+
     final statsMap = {for (final s in stats) s.playerId: s};
     final updated = _ranking.applyMatchToPlayers(
       roster: _players,
@@ -209,28 +244,15 @@ class SimfController extends ChangeNotifier {
     for (final p in updated) {
       await _local.upsertPlayer(p);
     }
+
+    // Offline-first: persistăm meciul + statistici local mereu.
+    await _local.insertMatchWithStats(match: m, stats: withIds, synced: false);
+
     if (_supabase.isReady) {
       try {
         await _supabase.upsertPlayers(updated);
-        final m = Match(
-          id: _uuid.v4(),
-          createdAt: DateTime.now().toUtc(),
-          scoreA: scoreA,
-          scoreB: scoreB,
-        );
-        final withIds = stats
-            .map((s) => MatchPlayerStats(
-                  matchId: m.id,
-                  playerId: s.playerId,
-                  team: s.team,
-                  goals: s.goals,
-                  saves: s.saves,
-                  isRotationGk: s.isRotationGk,
-                  receivedMvpVote: s.receivedMvpVote,
-                  cleanSheet: s.cleanSheet,
-                ))
-            .toList();
         await _supabase.insertMatchWithStats(match: m, stats: withIds);
+        await _local.markMatchSynced(m.id);
       } on SimfException catch (e) {
         _lastError = e.message;
       }
