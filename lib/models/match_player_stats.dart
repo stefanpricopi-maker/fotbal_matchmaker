@@ -12,6 +12,7 @@ class MatchPlayerStats {
     this.saves = 0,
     this.isRotationGk = false,
     this.receivedMvpVote = false,
+    this.receivedGkVote = false,
     this.cleanSheet = false,
   });
 
@@ -22,6 +23,7 @@ class MatchPlayerStats {
   final int saves;
   final bool isRotationGk;
   final bool receivedMvpVote;
+  final bool receivedGkVote;
   final bool cleanSheet;
 
   MatchPlayerStats copyWith({
@@ -32,6 +34,7 @@ class MatchPlayerStats {
     int? saves,
     bool? isRotationGk,
     bool? receivedMvpVote,
+    bool? receivedGkVote,
     bool? cleanSheet,
   }) {
     return MatchPlayerStats(
@@ -42,6 +45,7 @@ class MatchPlayerStats {
       saves: saves ?? this.saves,
       isRotationGk: isRotationGk ?? this.isRotationGk,
       receivedMvpVote: receivedMvpVote ?? this.receivedMvpVote,
+      receivedGkVote: receivedGkVote ?? this.receivedGkVote,
       cleanSheet: cleanSheet ?? this.cleanSheet,
     );
   }
@@ -54,6 +58,7 @@ class MatchPlayerStats {
         'saves': saves,
         'is_rotation_gk': isRotationGk,
         'received_mvp_vote': receivedMvpVote,
+        'received_gk_vote': receivedGkVote,
         'clean_sheet': cleanSheet,
       };
 
@@ -66,6 +71,7 @@ class MatchPlayerStats {
       saves: (json['saves'] as num?)?.toInt() ?? 0,
       isRotationGk: json['is_rotation_gk'] as bool? ?? false,
       receivedMvpVote: json['received_mvp_vote'] as bool? ?? false,
+      receivedGkVote: json['received_gk_vote'] as bool? ?? false,
       cleanSheet: json['clean_sheet'] as bool? ?? false,
     );
   }

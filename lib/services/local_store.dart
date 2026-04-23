@@ -13,14 +13,14 @@ class LocalStore {
   final Database _db;
 
   static const _dbName = 'simf.db';
-  static const _v2 = 2;
+  static const _v4 = 4;
 
   static Future<LocalStore> open() async {
     final dir = await getDatabasesPath();
     final path = p.join(dir, _dbName);
     final db = await openDatabase(
       path,
-      version: _v2,
+      version: _v4,
       onCreate: (db, version) async {
         await db.execute('''
 CREATE TABLE players (
@@ -53,10 +53,18 @@ CREATE TABLE match_player_stats (
   saves INTEGER NOT NULL,
   is_rotation_gk INTEGER NOT NULL,
   received_mvp_vote INTEGER NOT NULL,
+  received_gk_vote INTEGER NOT NULL,
   clean_sheet INTEGER NOT NULL,
   synced INTEGER NOT NULL,
   PRIMARY KEY (match_id, player_id),
   FOREIGN KEY (match_id) REFERENCES matches (id) ON DELETE CASCADE
+);
+''');
+
+        await db.execute('''
+CREATE TABLE player_aliases (
+  alias TEXT PRIMARY KEY,
+  player_id TEXT NOT NULL
 );
 ''');
       },
@@ -85,12 +93,27 @@ CREATE TABLE IF NOT EXISTS match_player_stats (
   saves INTEGER NOT NULL,
   is_rotation_gk INTEGER NOT NULL,
   received_mvp_vote INTEGER NOT NULL,
+  received_gk_vote INTEGER NOT NULL,
   clean_sheet INTEGER NOT NULL,
   synced INTEGER NOT NULL,
   PRIMARY KEY (match_id, player_id),
   FOREIGN KEY (match_id) REFERENCES matches (id) ON DELETE CASCADE
 );
 ''');
+        }
+        if (oldVersion < 3) {
+          await db.execute('''
+CREATE TABLE IF NOT EXISTS player_aliases (
+  alias TEXT PRIMARY KEY,
+  player_id TEXT NOT NULL
+);
+''');
+        }
+        if (oldVersion < 4) {
+          // add column for goalkeeper of match vote
+          await db.execute(
+            'ALTER TABLE match_player_stats ADD COLUMN received_gk_vote INTEGER NOT NULL DEFAULT 0;',
+          );
         }
       },
     );
@@ -152,6 +175,7 @@ CREATE TABLE IF NOT EXISTS match_player_stats (
             'saves': s.saves,
             'is_rotation_gk': s.isRotationGk ? 1 : 0,
             'received_mvp_vote': s.receivedMvpVote ? 1 : 0,
+            'received_gk_vote': s.receivedGkVote ? 1 : 0,
             'clean_sheet': s.cleanSheet ? 1 : 0,
             'synced': synced ? 1 : 0,
           },
@@ -237,10 +261,51 @@ CREATE TABLE IF NOT EXISTS match_player_stats (
             saves: (r['saves']! as num).toInt(),
             isRotationGk: (r['is_rotation_gk']! as int) != 0,
             receivedMvpVote: (r['received_mvp_vote']! as int) != 0,
+            receivedGkVote: (r['received_gk_vote']! as int) != 0,
             cleanSheet: (r['clean_sheet']! as int) != 0,
           ),
         )
         .toList(growable: false);
+  }
+
+  Future<Map<String, int>> getGoalsByPlayerId() async {
+    final rows = await _db.rawQuery(
+      '''
+SELECT player_id, COALESCE(SUM(goals), 0) AS goals_sum
+FROM match_player_stats
+GROUP BY player_id
+''',
+    );
+    final out = <String, int>{};
+    for (final r in rows) {
+      final id = r['player_id'] as String;
+      final g = (r['goals_sum'] as num?)?.toInt() ?? 0;
+      out[id] = g;
+    }
+    return out;
+  }
+
+  Future<String?> resolveAliasToPlayerId(String alias) async {
+    final rows = await _db.query(
+      'player_aliases',
+      columns: ['player_id'],
+      where: 'alias = ?',
+      whereArgs: [alias],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return rows.first['player_id'] as String?;
+  }
+
+  Future<void> upsertAlias({
+    required String alias,
+    required String playerId,
+  }) async {
+    await _db.insert(
+      'player_aliases',
+      {'alias': alias, 'player_id': playerId},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
   }
 
   Map<String, Object?> _playerToRow(Player p) => {

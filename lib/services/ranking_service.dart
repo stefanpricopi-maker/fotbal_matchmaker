@@ -46,40 +46,21 @@ class RankingService {
         .toList(growable: false);
   }
 
-  /// Ponderile pentru termenul „Saves” din formulă (secțiunea 3.2).
-  ///
-  /// - Portar permanent: pondere 3.
-  /// - Portar de rotație (mănușă): pondere 1.
-  /// - Altfel: parada unui jucător de câmp nu intră în formulă → 0.
-  double savesWeight({
-    required bool isPermanentGk,
-    required bool isRotationGk,
-  }) {
-    if (isPermanentGk) return 3;
-    if (isRotationGk) return 1;
-    return 0;
-  }
-
   /// Formula P_i din specificație (fără normalizare ulterioară).
   double computePerformanceScore({
     required bool wonMatch,
     required int goals,
-    required int saves,
-    required bool cleanSheet,
     required bool receivedMvpVote,
+    required bool receivedGkVote,
     required bool isPermanentGk,
     required bool isRotationGk,
   }) {
     final winPoints = wonMatch ? 10.0 : 0.0;
-    final gkW = savesWeight(
-      isPermanentGk: isPermanentGk,
-      isRotationGk: isRotationGk,
-    );
     return winPoints +
         goals * 4 +
-        saves * gkW +
-        (cleanSheet ? 8.0 : 0.0) +
-        (receivedMvpVote ? 7.0 : 0.0);
+        (receivedMvpVote ? 7.0 : 0.0) +
+        // "Portarul meciului" — doar pentru GK de rotație (cerință UI).
+        ((receivedGkVote && isRotationGk && !isPermanentGk) ? 6.0 : 0.0);
   }
 
   /// Probabilitate aproximativă că **echipa A** câștigă, folosind suma μ și
@@ -135,9 +116,8 @@ class RankingService {
         computePerformanceScore(
           wonMatch: teamAWon,
           goals: st.goals,
-          saves: st.saves,
-          cleanSheet: st.cleanSheet,
           receivedMvpVote: st.receivedMvpVote,
+          receivedGkVote: st.receivedGkVote,
           isPermanentGk: p.isPermanentGk,
           isRotationGk: st.isRotationGk,
         ),
@@ -150,9 +130,8 @@ class RankingService {
         computePerformanceScore(
           wonMatch: teamBWon,
           goals: st.goals,
-          saves: st.saves,
-          cleanSheet: st.cleanSheet,
           receivedMvpVote: st.receivedMvpVote,
+          receivedGkVote: st.receivedGkVote,
           isPermanentGk: p.isPermanentGk,
           isRotationGk: st.isRotationGk,
         ),

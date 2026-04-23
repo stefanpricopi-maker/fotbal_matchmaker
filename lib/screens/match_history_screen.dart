@@ -3,94 +3,147 @@ import 'package:provider/provider.dart';
 
 import '../models/models.dart';
 import '../providers/simf_controller.dart';
-import '../services/local_store.dart';
 import '../theme/simf_theme.dart';
 
-class MatchHistoryScreen extends StatelessWidget {
+class MatchHistoryScreen extends StatefulWidget {
   const MatchHistoryScreen({super.key});
+
+  @override
+  State<MatchHistoryScreen> createState() => _MatchHistoryScreenState();
+}
+
+class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
+  Future<List<({Match match, bool synced})>>? _future;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _future ??= context.read<SimfController>().localStore.getRecentMatches(
+          limit: 100,
+        );
+  }
+
+  Future<void> _refresh() async {
+    setState(() {
+      _future = context.read<SimfController>().localStore.getRecentMatches(
+            limit: 100,
+          );
+    });
+    await _future;
+  }
+
+  Future<void> _syncNow() async {
+    await context.read<SimfController>().loadPlayers();
+    await _refresh();
+  }
 
   @override
   Widget build(BuildContext context) {
     final ctrl = context.watch<SimfController>();
-    final store = ctrl.localStore;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Istoric meciuri'),
+        actions: [
+          if (ctrl.hasCloudSync)
+            IconButton(
+              tooltip: 'Sync acum',
+              onPressed: _syncNow,
+              icon: const Icon(Icons.cloud_sync_outlined),
+            ),
+        ],
       ),
-      body: FutureBuilder<List<({Match match, bool synced})>>(
-        future: store.getRecentMatches(limit: 100),
-        builder: (context, snap) {
-          if (snap.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
+      body: RefreshIndicator(
+        color: SimfTheme.pitchGreenLight,
+        onRefresh: () async {
+          if (ctrl.hasCloudSync) {
+            // Pull-to-refresh: întâi încercăm sync, apoi reîncărcăm lista.
+            await _syncNow();
+          } else {
+            await _refresh();
           }
-          final data = snap.data ?? const [];
-          if (data.isEmpty) {
-            return const Center(child: Text('Nu există meciuri salvate încă.'));
-          }
-
-          return ListView.separated(
-            itemCount: data.length,
-            separatorBuilder: (_, __) => const Divider(height: 1),
-            itemBuilder: (context, i) {
-              final m = data[i].match;
-              final synced = data[i].synced;
-              final when = m.createdAt.toLocal();
-              final subtitle =
-                  '${when.day.toString().padLeft(2, '0')}.${when.month.toString().padLeft(2, '0')} '
-                  '${when.hour.toString().padLeft(2, '0')}:${when.minute.toString().padLeft(2, '0')}'
-                  ' • ${m.durationMinutes} min';
-
-              return ListTile(
-                title: Row(
-                  children: [
-                    Text(
-                      '${m.scoreA} - ${m.scoreB}',
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    const SizedBox(width: 10),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: synced
-                            ? SimfTheme.pitchGreenLight.withValues(alpha: 0.2)
-                            : Colors.orange.withValues(alpha: 0.18),
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(
-                          color: synced
-                              ? SimfTheme.pitchGreenLight
-                              : Colors.orange,
-                        ),
-                      ),
-                      child: Text(
-                        synced ? 'Synced' : 'Offline',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: synced
-                              ? SimfTheme.pitchGreenLight
-                              : Colors.orange,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                subtitle: Text(subtitle),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => MatchHistoryDetailScreen(match: m),
-                    ),
-                  );
-                },
-              );
-            },
-          );
         },
+        child: FutureBuilder<List<({Match match, bool synced})>>(
+          future: _future,
+          builder: (context, snap) {
+            if (snap.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            final data = snap.data ?? const [];
+            if (data.isEmpty) {
+              return ListView(
+                children: const [
+                  SizedBox(height: 240),
+                  Center(child: Text('Nu există meciuri salvate încă.')),
+                ],
+              );
+            }
+
+            return ListView.separated(
+              itemCount: data.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (context, i) {
+                final m = data[i].match;
+                final synced = data[i].synced;
+                final when = m.createdAt.toLocal();
+                final subtitle =
+                    '${when.day.toString().padLeft(2, '0')}.${when.month.toString().padLeft(2, '0')} '
+                    '${when.hour.toString().padLeft(2, '0')}:${when.minute.toString().padLeft(2, '0')}'
+                    ' • ${m.durationMinutes} min';
+
+                return ListTile(
+                  title: Row(
+                    children: [
+                      Text(
+                        '${m.scoreA} - ${m.scoreB}',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(width: 10),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: synced
+                              ? SimfTheme.pitchGreenLight.withValues(alpha: 0.2)
+                              : Colors.orange.withValues(alpha: 0.18),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                            color: synced
+                                ? SimfTheme.pitchGreenLight
+                                : Colors.orange,
+                          ),
+                        ),
+                        child: Text(
+                          synced ? 'Synced' : 'Offline',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: synced
+                                ? SimfTheme.pitchGreenLight
+                                : Colors.orange,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  subtitle: Text(subtitle),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => MatchHistoryDetailScreen(match: m),
+                      ),
+                    );
+                    // când revii din detalii, reîncarcă (status synced se poate schimba).
+                    await _refresh();
+                  },
+                );
+              },
+            );
+          },
+        ),
       ),
     );
   }
@@ -157,13 +210,29 @@ class MatchHistoryDetailScreen extends StatelessWidget {
                           return ListTile(
                             title: Text(name),
                             subtitle: Text(
-                              'G:${s.goals}  P:${s.saves}'
-                              '${s.isRotationGk ? '  • GK rot.' : ''}'
-                              '${s.cleanSheet ? '  • CS' : ''}',
+                              'G:${s.goals}'
+                              '${s.isRotationGk ? '  • GK rot.' : ''}',
                             ),
-                            trailing: s.receivedMvpVote
-                                ? const Icon(Icons.star, color: Colors.amber)
-                                : null,
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (s.receivedGkVote)
+                                  const Icon(
+                                    Icons.shield,
+                                    color: Colors.amber,
+                                    size: 18,
+                                  ),
+                                if (s.receivedMvpVote)
+                                  const Padding(
+                                    padding: EdgeInsets.only(left: 6),
+                                    child: Icon(
+                                      Icons.star,
+                                      color: Colors.amber,
+                                      size: 18,
+                                    ),
+                                  ),
+                              ],
+                            ),
                           );
                         },
                       ),

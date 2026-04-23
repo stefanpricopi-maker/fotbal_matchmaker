@@ -18,9 +18,8 @@ class _LineStat {
   final Player player;
   final MatchTeam team;
   int goals = 0;
-  int saves = 0;
   bool rotationGk = false;
-  bool cleanSheet = false;
+  bool gkOfMatch = false;
   bool mvp = false;
 }
 
@@ -38,7 +37,14 @@ class _MatchEntryScreenState extends State<MatchEntryScreen> {
   int _scoreA = 0;
   int _scoreB = 0;
   bool _busy = false;
-  _MvpMode _mvpMode = _MvpMode.admin;
+
+  int get _sumGoalsA => _lines
+      .where((l) => l.team == MatchTeam.a)
+      .fold<int>(0, (s, l) => s + l.goals);
+  int get _sumGoalsB => _lines
+      .where((l) => l.team == MatchTeam.b)
+      .fold<int>(0, (s, l) => s + l.goals);
+  bool get _goalsMatchScore => _sumGoalsA == _scoreA && _sumGoalsB == _scoreB;
 
   @override
   void didChangeDependencies() {
@@ -74,12 +80,18 @@ class _MatchEntryScreenState extends State<MatchEntryScreen> {
     });
   }
 
-  bool _mvpEnabledForTeam(MatchTeam team) {
-    return switch (_mvpMode) {
-      _MvpMode.admin => true,
-      _MvpMode.aVotes => team == MatchTeam.b, // A votează adversarii (B)
-      _MvpMode.bVotes => team == MatchTeam.a, // B votează adversarii (A)
-    };
+  void _setGkOfMatchExclusive(_LineStat target) {
+    if (!target.rotationGk) return;
+    setState(() {
+      if (target.gkOfMatch) {
+        target.gkOfMatch = false;
+      } else {
+        for (final l in _lines) {
+          l.gkOfMatch = false;
+        }
+        target.gkOfMatch = true;
+      }
+    });
   }
 
   Future<void> _submit() async {
@@ -102,10 +114,9 @@ class _MatchEntryScreenState extends State<MatchEntryScreen> {
             playerId: line.player.id,
             team: line.team,
             goals: line.goals,
-            saves: line.saves,
             isRotationGk: line.rotationGk,
             receivedMvpVote: line.mvp,
-            cleanSheet: line.cleanSheet,
+            receivedGkVote: line.gkOfMatch,
           ),
         );
       }
@@ -211,45 +222,20 @@ class _MatchEntryScreenState extends State<MatchEntryScreen> {
       ),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
-            child: Row(
-              children: [
-                const Text(
-                  'Vot MVP:',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: SegmentedButton<_MvpMode>(
-                    showSelectedIcon: false,
-                    segments: const [
-                      ButtonSegment(
-                        value: _MvpMode.admin,
-                        label: Text('Admin'),
-                        icon: Icon(Icons.admin_panel_settings_outlined),
-                      ),
-                      ButtonSegment(
-                        value: _MvpMode.aVotes,
-                        label: Text('A votează'),
-                        icon: Icon(Icons.how_to_vote_outlined),
-                      ),
-                      ButtonSegment(
-                        value: _MvpMode.bVotes,
-                        label: Text('B votează'),
-                        icon: Icon(Icons.how_to_vote_outlined),
-                      ),
-                    ],
-                    selected: {_mvpMode},
-                    onSelectionChanged: (s) {
-                      if (s.isEmpty) return;
-                      setState(() => _mvpMode = s.first);
-                    },
-                  ),
-                ),
-              ],
-            ),
+          _ScoreBar(
+            scoreA: _scoreA,
+            scoreB: _scoreB,
+            onChangeA: (v) => setState(() => _scoreA = v),
+            onChangeB: (v) => setState(() => _scoreB = v),
           ),
+          if (!_goalsMatchScore)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+              child: Text(
+                'Goluri jucători ≠ scor: A $_sumGoalsA/$_scoreA • B $_sumGoalsB/$_scoreB',
+                style: TextStyle(color: Colors.orange.shade300),
+              ),
+            ),
           Expanded(
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -261,7 +247,8 @@ class _MatchEntryScreenState extends State<MatchEntryScreen> {
                     lines: _teamALines,
                     onChanged: () => setState(() {}),
                     onMvp: _setMvpExclusive,
-                    mvpEnabled: _mvpEnabledForTeam(MatchTeam.a),
+                    onGkOfMatch: _setGkOfMatchExclusive,
+                    mvpEnabled: true,
                   ),
                 ),
                 const VerticalDivider(width: 1),
@@ -272,17 +259,12 @@ class _MatchEntryScreenState extends State<MatchEntryScreen> {
                     lines: _teamBLines,
                     onChanged: () => setState(() {}),
                     onMvp: _setMvpExclusive,
-                    mvpEnabled: _mvpEnabledForTeam(MatchTeam.b),
+                    onGkOfMatch: _setGkOfMatchExclusive,
+                    mvpEnabled: true,
                   ),
                 ),
               ],
             ),
-          ),
-          _ScoreBar(
-            scoreA: _scoreA,
-            scoreB: _scoreB,
-            onChangeA: (v) => setState(() => _scoreA = v),
-            onChangeB: (v) => setState(() => _scoreB = v),
           ),
           SafeArea(
             child: Padding(
@@ -290,7 +272,8 @@ class _MatchEntryScreenState extends State<MatchEntryScreen> {
               child: SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
-                  onPressed: _busy ? null : _submit,
+                  onPressed:
+                      (_busy || !_goalsMatchScore) ? null : _submit,
                   icon: _busy
                       ? const SizedBox(
                           width: 22,
@@ -316,6 +299,7 @@ class _TeamPanel extends StatelessWidget {
     required this.lines,
     required this.onChanged,
     required this.onMvp,
+    required this.onGkOfMatch,
     required this.mvpEnabled,
   });
 
@@ -324,6 +308,7 @@ class _TeamPanel extends StatelessWidget {
   final List<_LineStat> lines;
   final VoidCallback onChanged;
   final void Function(_LineStat) onMvp;
+  final void Function(_LineStat) onGkOfMatch;
   final bool mvpEnabled;
 
   @override
@@ -351,6 +336,7 @@ class _TeamPanel extends StatelessWidget {
                       accent: color,
                       onChanged: onChanged,
                       onMvp: mvpEnabled ? () => onMvp(line) : null,
+                      onGkOfMatch: line.rotationGk ? () => onGkOfMatch(line) : null,
                     ),
                   )
                   .toList(),
@@ -368,16 +354,21 @@ class _PlayerRow extends StatelessWidget {
     required this.accent,
     required this.onChanged,
     required this.onMvp,
+    required this.onGkOfMatch,
   });
 
   final _LineStat line;
   final Color accent;
   final VoidCallback onChanged;
   final VoidCallback? onMvp;
+  final VoidCallback? onGkOfMatch;
 
   @override
   Widget build(BuildContext context) {
     final p = line.player;
+    const iconSize = 22.0;
+    const btnW = 40.0;
+    const btnH = 40.0;
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
       child: Padding(
@@ -393,11 +384,54 @@ class _PlayerRow extends StatelessWidget {
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                 ),
+                const Icon(Icons.sports_soccer, size: iconSize, color: Colors.white70),
+                const SizedBox(width: 2),
+                IconButton(
+                  tooltip: 'Gol -1',
+                  constraints: const BoxConstraints.tightFor(
+                    width: btnW,
+                    height: btnH,
+                  ),
+                  padding: EdgeInsets.zero,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () {
+                    if (line.goals > 0) line.goals--;
+                    onChanged();
+                  },
+                  icon: const Icon(Icons.remove_circle_outline, size: iconSize),
+                ),
+                SizedBox(
+                  width: 22,
+                  child: Text(
+                    '${line.goals}',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      color: accent,
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Gol +1',
+                  constraints: const BoxConstraints.tightFor(
+                    width: btnW,
+                    height: btnH,
+                  ),
+                  padding: EdgeInsets.zero,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () {
+                    line.goals++;
+                    onChanged();
+                  },
+                  icon: Icon(Icons.add_circle, size: iconSize, color: accent),
+                ),
                 if (!p.isPermanentGk)
                   IconButton(
                     tooltip: 'Portar rotație',
                     onPressed: () {
                       line.rotationGk = !line.rotationGk;
+                      if (!line.rotationGk) line.gkOfMatch = false;
                       onChanged();
                     },
                     icon: Icon(
@@ -406,107 +440,29 @@ class _PlayerRow extends StatelessWidget {
                     ),
                   ),
                 IconButton(
-                  tooltip: onMvp == null
-                      ? 'MVP: selectează întâi cine votează (adversari)'
-                      : 'MVP (vot adversari, max. 1 per echipă)',
+                  tooltip: line.rotationGk
+                      ? 'Portarul meciului (1 singur)'
+                      : 'Bifează mai întâi portar rotație',
+                  onPressed: line.rotationGk ? onGkOfMatch : null,
+                  icon: Icon(
+                    Icons.shield_outlined,
+                    color: line.gkOfMatch ? Colors.amber : Colors.white38,
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'MVP (max. 1 per echipă)',
                   onPressed: onMvp,
                   icon: Icon(
                     line.mvp ? Icons.star : Icons.star_border,
                     color: line.mvp
                         ? Colors.amber
-                        : (onMvp == null ? Colors.grey.shade400 : Colors.grey),
+                        : Colors.grey,
                   ),
                 ),
               ],
             ),
-            _Tally(
-              label: 'Goluri',
-              value: line.goals,
-              onMinus: () {
-                if (line.goals > 0) line.goals--;
-                onChanged();
-              },
-              onPlus: () {
-                line.goals++;
-                onChanged();
-              },
-              accent: accent,
-            ),
-            _Tally(
-              label: 'Parade',
-              value: line.saves,
-              onMinus: () {
-                if (line.saves > 0) line.saves--;
-                onChanged();
-              },
-              onPlus: () {
-                line.saves++;
-                onChanged();
-              },
-              accent: accent,
-            ),
-            SwitchListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Clean sheet'),
-              value: line.cleanSheet,
-              onChanged: (v) {
-                line.cleanSheet = v;
-                onChanged();
-              },
-            ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-enum _MvpMode { admin, aVotes, bVotes }
-
-class _Tally extends StatelessWidget {
-  const _Tally({
-    required this.label,
-    required this.value,
-    required this.onMinus,
-    required this.onPlus,
-    required this.accent,
-  });
-
-  final String label;
-  final int value;
-  final VoidCallback onMinus;
-  final VoidCallback onPlus;
-  final Color accent;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: [
-          SizedBox(width: 72, child: Text(label)),
-          IconButton.filledTonal(
-            onPressed: onMinus,
-            icon: const Icon(Icons.remove),
-          ),
-          Expanded(
-            child: Text(
-              '$value',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: accent,
-              ),
-            ),
-          ),
-          IconButton.filled(
-            style: IconButton.styleFrom(backgroundColor: accent),
-            onPressed: onPlus,
-            icon: const Icon(Icons.add),
-          ),
-        ],
       ),
     );
   }

@@ -34,12 +34,14 @@ class SimfController extends ChangeNotifier {
   MatchmakingResult? _lastMatch;
   String? _lastError;
   bool _loading = false;
+  Map<String, int> _goalsByPlayerId = const {};
 
   List<Player> get players => List.unmodifiable(_players);
   Set<String> get selectedIds => Set.unmodifiable(_selectedIds);
   MatchmakingResult? get lastMatch => _lastMatch;
   String? get lastError => _lastError;
   bool get isLoading => _loading;
+  int goalsForPlayer(String playerId) => _goalsByPlayerId[playerId] ?? 0;
 
   LocalStore get localStore => _local;
 
@@ -117,6 +119,7 @@ class SimfController extends ChangeNotifier {
         }
       }
       _players = local;
+      _goalsByPlayerId = await _local.getGoalsByPlayerId();
     } catch (e, st) {
       _lastError = 'Nu s-au putut încărca jucătorii: $e';
       debugPrintStack(stackTrace: st);
@@ -125,12 +128,12 @@ class SimfController extends ChangeNotifier {
     }
   }
 
-  Future<void> addPlayer({
+  Future<Player?> addPlayer({
     required String name,
     required bool isPermanentGk,
   }) async {
     final trimmed = name.trim();
-    if (trimmed.isEmpty) return;
+    if (trimmed.isEmpty) return null;
 
     final p = Player(
       id: _uuid.v4(),
@@ -147,6 +150,30 @@ class SimfController extends ChangeNotifier {
       }
     }
     _players = [..._players, p]..sort((a, b) => a.name.compareTo(b.name));
+    notifyListeners();
+    return p;
+  }
+
+  Future<void> renamePlayer({
+    required Player player,
+    required String newName,
+  }) async {
+    final trimmed = newName.trim();
+    if (trimmed.isEmpty || trimmed == player.name) return;
+
+    final updated = player.copyWith(name: trimmed);
+    await _local.upsertPlayer(updated);
+    if (_supabase.isReady) {
+      try {
+        await _supabase.upsertPlayer(updated);
+      } on SimfException catch (e) {
+        _lastError = e.message;
+      }
+    }
+    _players = _players
+        .map((p) => p.id == updated.id ? updated : p)
+        .toList(growable: false)
+      ..sort((a, b) => a.name.compareTo(b.name));
     notifyListeners();
   }
 
@@ -175,6 +202,13 @@ class SimfController extends ChangeNotifier {
 
   void clearSelection() {
     _selectedIds.clear();
+    notifyListeners();
+  }
+
+  void setSelection(Iterable<String> ids) {
+    _selectedIds
+      ..clear()
+      ..addAll(ids);
     notifyListeners();
   }
 
@@ -259,6 +293,7 @@ class SimfController extends ChangeNotifier {
     }
 
     _players = updated..sort((a, b) => a.name.compareTo(b.name));
+    _goalsByPlayerId = await _local.getGoalsByPlayerId();
     _lastMatch = null;
     _selectedIds.clear();
     notifyListeners();
