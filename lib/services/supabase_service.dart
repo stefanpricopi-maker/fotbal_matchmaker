@@ -9,6 +9,19 @@ import '../models/models.dart';
 /// Dacă aplicația nu este inițializată cu URL + cheie anonimă, metodele semnalează
 /// clar o [SimfException] — fluxul UI poate continua doar cu [LocalStore].
 class SupabaseService {
+  static String _pgDetail(PostgrestException e) {
+    final parts = <String>[];
+    if (e.code != null && e.code!.trim().isNotEmpty) {
+      parts.add('code ${e.code}');
+    }
+    if (e.message.trim().isNotEmpty) parts.add(e.message.trim());
+    final d = e.details?.toString().trim();
+    if (d != null && d.isNotEmpty) parts.add('details: $d');
+    final h = e.hint?.toString().trim();
+    if (h != null && h.isNotEmpty) parts.add('hint: $h');
+    return parts.isEmpty ? e.toString() : parts.join(' — ');
+  }
+
   SupabaseClient? get _client {
     try {
       return Supabase.instance.client;
@@ -61,7 +74,10 @@ class SupabaseService {
         },
       );
       // #endregion
-      throw SimfException('Eroare la citirea jucătorilor din Supabase.', e);
+      throw SimfException(
+        'Eroare la citirea jucătorilor din Supabase: ${_pgDetail(e)}',
+        e,
+      );
     } catch (e) {
       // #region agent log
       DebugLog.write(
@@ -81,7 +97,10 @@ class SupabaseService {
     try {
       await _client!.from('players').upsert(player.toJson());
     } on PostgrestException catch (e) {
-      throw SimfException('Nu s-a putut salva jucătorul în Supabase.', e);
+      throw SimfException(
+        'Nu s-a putut salva jucătorul în Supabase: ${_pgDetail(e)}',
+        e,
+      );
     }
   }
 
@@ -94,7 +113,10 @@ class SupabaseService {
             players.map((p) => p.toJson()).toList(),
           );
     } on PostgrestException catch (e) {
-      throw SimfException('Nu s-au putut sincroniza jucătorii în Supabase.', e);
+      throw SimfException(
+        'Nu s-au putut sincroniza jucătorii în Supabase: ${_pgDetail(e)}',
+        e,
+      );
     }
   }
 
@@ -103,30 +125,72 @@ class SupabaseService {
     try {
       await _client!.from('players').delete().eq('id', id);
     } on PostgrestException catch (e) {
-      throw SimfException('Ștergerea jucătorului din Supabase a eșuat.', e);
+      throw SimfException(
+        'Ștergerea jucătorului din Supabase a eșuat: ${_pgDetail(e)}',
+        e,
+      );
     }
   }
 
-  /// Inserează meciul și statisticile; la eșec la statistici, șterge meciul inserat.
-  Future<void> insertMatchWithStats({
+  /// Upsert meci + statistici (idempotent la reîncercări / LWW).
+  Future<void> upsertMatchWithStats({
     required Match match,
     required List<MatchPlayerStats> stats,
   }) async {
     _requireClient();
     try {
-      await _client!.from('matches').insert(match.toJson());
+      await _client!.from('matches').upsert(match.toJson());
     } on PostgrestException catch (e) {
-      throw SimfException('Salvare meci în Supabase eșuată.', e);
+      throw SimfException(
+        'Salvare meci în Supabase eșuată: ${_pgDetail(e)}',
+        e,
+      );
     }
     if (stats.isEmpty) return;
     try {
-      await _client!.from('match_player_stats').insert(
+      await _client!.from('match_player_stats').upsert(
             stats.map((s) => s.toJson()).toList(),
           );
     } on PostgrestException catch (e) {
       await _client!.from('matches').delete().eq('id', match.id);
       throw SimfException(
-        'Statisticile nu s-au putut salva; meciul a fost anulat în cloud.',
+        'Statisticile nu s-au putut salva; meciul a fost anulat în cloud: '
+        '${_pgDetail(e)}',
+        e,
+      );
+    }
+  }
+
+  Future<List<Match>> fetchMatches() async {
+    _requireClient();
+    try {
+      final rows = await _client!.from('matches').select().order('created_at');
+      final list = rows as List<dynamic>;
+      return list
+          .map((e) => Match.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+    } on PostgrestException catch (e) {
+      throw SimfException(
+        'Eroare la citirea meciurilor din Supabase: ${_pgDetail(e)}',
+        e,
+      );
+    }
+  }
+
+  Future<List<MatchPlayerStats>> fetchAllMatchPlayerStats() async {
+    _requireClient();
+    try {
+      final rows = await _client!.from('match_player_stats').select();
+      final list = rows as List<dynamic>;
+      return list
+          .map(
+            (e) =>
+                MatchPlayerStats.fromJson(Map<String, dynamic>.from(e as Map)),
+          )
+          .toList();
+    } on PostgrestException catch (e) {
+      throw SimfException(
+        'Eroare la citirea statisticilor de meci din Supabase: ${_pgDetail(e)}',
         e,
       );
     }

@@ -4,65 +4,93 @@ Listă derivată din `specification.md`. Bifează incremental pe măsură ce imp
 
 ---
 
+## Roadmap (prioritate / „mai târziu”)
+
+Idee păstrate din discuții; nu sunt blocate de bifările de mai sus.
+
+- [ ] **CI**: GitHub Actions (sau echivalent) — `flutter analyze` + `flutter test` la fiecare PR.
+- [ ] **Supabase multi-user**: RLS + autentificare (înlocuire politici permisive); eventual `user_id` / tenant pe rânduri.
+- [ ] **Teste**: `SimfController` / flux sync cu `SupabaseService` mock; widget test minimal pe ecranul de scor (validare + stare).
+- [ ] **UX sync**: mesaje clare când `loadPlayers` reușește parțial (ex. meciuri încă offline) sau eșuează.
+- [ ] **Meciuri**: editare / ștergere locală + propagare cloud (după ce există model de „owner” dacă ai auth).
+- [ ] **Performanță sync**: paginare / filtru la `fetchMatches` când istoricul devine mare.
+- [ ] **Opțional vizual**: font dedicat (ex. `google_fonts`) pentru identitate mai puternică.
+
+---
+
 ## Setup și fundație
 
-- [ ] Inițializare proiect Flutter + dependențe: `sqflite`, client Supabase, `openskill_dart` (sau echivalent rating).
-- [ ] Configurare mediu: URL Supabase, chei, variabile locale sigure.
-- [ ] Convenții: enum `team` (`A` / `B`), mapare la UI (ex. Roșu/Albastru) dacă e cazul.
+- [x] Inițializare proiect Flutter + dependențe: `sqflite`, client Supabase, rating (TrueSkill/`matchmaker`).
+- [x] Configurare mediu: URL Supabase, chei, variabile locale sigure (`--dart-define-from-file`).
+- [x] Convenții: enum `team` (`A` / `B`), mapare la UI (Roșu/Albastru).
 
 ---
 
 ## Date: Supabase / PostgreSQL
 
-- [ ] Migrări / SQL pentru `players` (`id`, `name`, `mu`, `sigma`, `is_permanent_gk`, `matches_played` cu default-urile din spec).
-- [ ] Migrări pentru `matches` (`id`, `created_at`, `score_a`, `score_b`, `duration_minutes` default 90).
-- [ ] Migrări pentru `match_player_stats` (FK-uri, `team`, `goals`, `saves`, `is_rotation_gk`, `received_mvp_vote`, `clean_sheet`).
-- [ ] Politici RLS / autentificare dacă e multi-user (spec: „administrator” la vot MVP).
+- [x] Migrări / SQL pentru `players` (`id`, `name`, `mu`, `sigma`, `is_permanent_gk`, `matches_played`).
+- [x] Migrări pentru `matches` (`id`, `created_at`, `score_a`, `score_b`, `duration_minutes`).
+- [x] Migrări pentru `match_player_stats` (FK-uri, `team`, `goals`, `is_rotation_gk`, `received_mvp_vote`, `received_gk_vote`).
+- [ ] Politici RLS / autentificare dacă e multi-user (deocamdată proto permisiv).
 
 ---
 
 ## Modele și persistență locală (SQLite)
 
-- [ ] Modele Dart aliniate la schema; `is_permanent_gk` folosit în logica de calcul, nu doar ca câmp.
-- [ ] Schema SQLite locală (tabele echivalente sau subset + coadă sincronizare).
-- [ ] Repository / DAO: CRUD jucători, creare meci, statistici per jucător/meci.
-- [ ] Sincronizare: scriere locală mereu; push către Supabase la reconectare; strategie conflicte (de clarificat: last-write / server-wins).
+- [x] Modele Dart aliniate la schema.
+- [x] Schema SQLite locală: `players`, `matches`, `match_player_stats`, `player_aliases` (+ upgrade versions).
+- [x] CRUD jucători (add/delete/rename).
+- [x] Persistare offline-first: meci + statistici local mereu; sync către Supabase când e online + retry la `loadPlayers`.
+- [x] Strategie conflicte multi-device: **last-write-wins** pe `players.updated_at` și `matches.updated_at` (îmbinare la `loadPlayers` + upsert-uri).
 
 ---
 
 ## Algoritmi și business logic
 
-- [ ] `MatchmakingEngine`: dacă există 2 jucători cu `is_permanent_gk == true`, unul în A, unul în B.
-- [ ] Repartizare aleatoare inițială a restului pe A/B.
-- [ ] 100 iterații de swap pentru minimizarea |Σμ_A − Σμ_B|, păstrând constrângerea portarilor permanenți.
-- [ ] Afișare „șanse de câștig” bazată pe distribuția normală a ratingurilor (agregat pe echipă).
-- [ ] După meci: calcul P_i (Win×10, Goals×4, Saves×W_gk, CleanSheet×8, OpponentMVP×7).
-- [ ] W_gk: 3 dacă `is_permanent_gk`, 1 dacă `is_rotation_gk`.
-- [ ] OpenSkill: actualizare `mu` / `sigma`; increment `matches_played` unde e cazul.
+- [x] `MatchmakingEngine`: portari permanenți în echipe diferite; locked în swap.
+- [x] Repartizare aleatoare inițială.
+- [x] Swap iterativ + multi-restart + tie-break aleator.
+- [x] Optimizare compusă: echilibru + omogenitate (spread mic în echipe).
+- [x] Afișare „șanse de câștig”.
+- [x] Rating update TrueSkill cu ponderare aproximativă după performanță (weights).
 
 ---
 
 ## UX: post-meci (Rapid Fire)
 
-- [ ] Ecran split-screen: stânga o echipă, dreapta cealaltă.
-- [ ] Rând per jucător: butoane mari +/− pentru goluri.
-- [ ] Toggle „mănușă” pentru `is_rotation_gk` (când nu e portar fix).
-- [ ] Vot MVP (stea): reguli adversari / o stea per echipă — implementare clară (ex. admin sau consens).
-- [ ] Scor meci, durată, `clean_sheet` per rând (sau regulă de propagare dacă simplifici).
-- [ ] Salvare draft local la acțiuni (înainte de submit final).
+- [x] Ecran split-screen: stânga o echipă, dreapta cealaltă.
+- [x] Goluri per jucător: counter compact (minge +/−) în rând.
+- [x] Toggle „mănușă” pentru `is_rotation_gk`.
+- [x] Vot MVP (stea): max. 1 per echipă (admin).
+- [x] Vot “Portarul meciului” (scut): max. 1 pe meci, doar pentru GK rotație.
+- [x] Validare: scorul de sus trebuie să fie egal cu suma golurilor jucătorilor.
 
 ---
 
 ## UI general și polish
 
-- [ ] Temă dark, accente verde gazon, roșu/albastru pentru echipe.
-- [ ] Flux: jucători → generare echipe → meci → rezumat → sincronizare.
-- [ ] Mesaje offline: salvat local, trimis când există rețea.
+- [x] Temă dark sport (gazon) + card styling + accente.
+- [x] Flux: jucători → import WhatsApp → preview echipe → introducere scor → istoric/sync.
+- [x] Ecran “Echipe generate” + “Generează iar”.
+- [x] Ecran “Istoric meciuri” + detalii + sync manual.
+- [x] Mesaje offline + status synced/offline.
+- [x] **Introducere scor**: chip-uri șansă A/B, bară scor cu gradient discret, header coloane cu gradient, rânduri jucători tip „sheet” (separatori + chenar).
+- [x] **Listă jucători**: avatar circular cu gradient după skill + badge vizibil portar permanent.
 
 ---
 
 ## Calitate și livrare
 
-- [ ] Teste unitare: matchmaking (portari + swap), P_i, ponderi portar.
+- [x] Teste unitare: matchmaking (portari + swap), ranking / ponderi (vezi `test/`).
 - [ ] Teste minime UI pentru ecranul de scor (fără pierdere date).
 - [ ] Verificare end-to-end: meci complet → ratinguri local + după sync în Supabase.
+
+---
+
+## Import WhatsApp (admin workflow)
+
+- [x] Textarea paste listă WhatsApp + parsing robust (linii/virgule/numere).
+- [x] Matching asistat cu sugestii (fuzzy) + dialog de alegere.
+- [x] “Jucător nou” direct din modal.
+- [x] “Învățare” alias-uri (mapare WhatsApp string → playerId).
+- [x] Opțiune “Creează automat jucătorii lipsă” + rezumat import.

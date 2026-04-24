@@ -9,44 +9,36 @@ class MatchPlayerStats {
     required this.playerId,
     required this.team,
     this.goals = 0,
-    this.saves = 0,
     this.isRotationGk = false,
     this.receivedMvpVote = false,
     this.receivedGkVote = false,
-    this.cleanSheet = false,
   });
 
   final String matchId;
   final String playerId;
   final MatchTeam team;
   final int goals;
-  final int saves;
   final bool isRotationGk;
   final bool receivedMvpVote;
   final bool receivedGkVote;
-  final bool cleanSheet;
 
   MatchPlayerStats copyWith({
     String? matchId,
     String? playerId,
     MatchTeam? team,
     int? goals,
-    int? saves,
     bool? isRotationGk,
     bool? receivedMvpVote,
     bool? receivedGkVote,
-    bool? cleanSheet,
   }) {
     return MatchPlayerStats(
       matchId: matchId ?? this.matchId,
       playerId: playerId ?? this.playerId,
       team: team ?? this.team,
       goals: goals ?? this.goals,
-      saves: saves ?? this.saves,
       isRotationGk: isRotationGk ?? this.isRotationGk,
       receivedMvpVote: receivedMvpVote ?? this.receivedMvpVote,
       receivedGkVote: receivedGkVote ?? this.receivedGkVote,
-      cleanSheet: cleanSheet ?? this.cleanSheet,
     );
   }
 
@@ -55,12 +47,18 @@ class MatchPlayerStats {
         'player_id': playerId,
         'team': team.dbValue,
         'goals': goals,
-        'saves': saves,
         'is_rotation_gk': isRotationGk,
         'received_mvp_vote': receivedMvpVote,
         'received_gk_vote': receivedGkVote,
-        'clean_sheet': cleanSheet,
       };
+
+  static bool _bool(dynamic v) {
+    if (v == null) return false;
+    if (v is bool) return v;
+    if (v is int) return v != 0;
+    if (v is num) return v != 0;
+    return false;
+  }
 
   factory MatchPlayerStats.fromJson(Map<String, dynamic> json) {
     return MatchPlayerStats(
@@ -68,11 +66,9 @@ class MatchPlayerStats {
       playerId: json['player_id'] as String,
       team: MatchTeam.fromDb(json['team'] as String),
       goals: (json['goals'] as num?)?.toInt() ?? 0,
-      saves: (json['saves'] as num?)?.toInt() ?? 0,
-      isRotationGk: json['is_rotation_gk'] as bool? ?? false,
-      receivedMvpVote: json['received_mvp_vote'] as bool? ?? false,
-      receivedGkVote: json['received_gk_vote'] as bool? ?? false,
-      cleanSheet: json['clean_sheet'] as bool? ?? false,
+      isRotationGk: _bool(json['is_rotation_gk']),
+      receivedMvpVote: _bool(json['received_mvp_vote']),
+      receivedGkVote: _bool(json['received_gk_vote']),
     );
   }
 

@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
 
+import '../models/models.dart';
 import '../providers/simf_controller.dart';
 import '../theme/simf_theme.dart';
 import 'match_setup_screen.dart';
+import 'match_history_screen.dart';
+import 'player_profile_screen.dart';
 
 /// Lista jucătorilor + adăugare profil nou (SQLite + opțional Supabase).
 class PlayerListScreen extends StatefulWidget {
@@ -13,13 +17,80 @@ class PlayerListScreen extends StatefulWidget {
   State<PlayerListScreen> createState() => _PlayerListScreenState();
 }
 
+enum _PlayerSort { name, skill, lastMatch, goals }
+enum _PlayerRowAction { rename, delete }
+enum _TopAction { devSeed, devClearSeed }
+
 class _PlayerListScreenState extends State<PlayerListScreen> {
+  final TextEditingController _searchCtrl = TextEditingController();
+  String _query = '';
+  _PlayerSort _sort = _PlayerSort.name;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<SimfController>().loadPlayers();
     });
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  String _stripDiacritics(String s) {
+    return s
+        .replaceAll('ă', 'a')
+        .replaceAll('â', 'a')
+        .replaceAll('î', 'i')
+        .replaceAll('ș', 's')
+        .replaceAll('ş', 's')
+        .replaceAll('ț', 't')
+        .replaceAll('ţ', 't')
+        .replaceAll('Ă', 'A')
+        .replaceAll('Â', 'A')
+        .replaceAll('Î', 'I')
+        .replaceAll('Ș', 'S')
+        .replaceAll('Ş', 'S')
+        .replaceAll('Ț', 'T')
+        .replaceAll('Ţ', 'T');
+  }
+
+  String _norm(String s) => _stripDiacritics(s).toLowerCase();
+
+  /// Gradient discret pe avatar, derivat din skill conservator (μ − 3σ).
+  List<Color> _avatarGradient(Player p) {
+    final t = (p.conservativeSkill / 40.0).clamp(0.0, 1.0);
+    return [
+      Color.lerp(SimfTheme.surface2, SimfTheme.pitchGreenLight, t * 0.88)!,
+      Color.lerp(SimfTheme.card, SimfTheme.teamBlue, 0.32 + t * 0.45)!,
+    ];
+  }
+
+  String _initials(String name) {
+    final parts = name
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((e) => e.isNotEmpty)
+        .toList(growable: false);
+    if (parts.isEmpty) return '?';
+    if (parts.length == 1) {
+      final w = parts.first;
+      return (w.length >= 2 ? w.substring(0, 2) : w).toUpperCase();
+    }
+    final a = parts.first[0].toUpperCase();
+    final b = parts.last[0].toUpperCase();
+    return '$a$b';
+  }
+
+  String _relativeDays(DateTime? dt) {
+    if (dt == null) return '—';
+    final d = DateTime.now().difference(dt).inDays;
+    if (d <= 0) return 'azi';
+    if (d == 1) return 'ieri';
+    return '$d zile';
   }
 
   Future<void> _showAddDialog() async {
@@ -79,44 +150,28 @@ class _PlayerListScreenState extends State<PlayerListScreen> {
     nameCtrl.dispose();
   }
 
-  Future<void> _showRenameDialog(String currentName) async {
-    final ctrl = TextEditingController(text: currentName);
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Editează numele'),
-        content: TextField(
-          controller: ctrl,
-          decoration: const InputDecoration(
-            labelText: 'Nume',
-            border: OutlineInputBorder(),
-          ),
-          textCapitalization: TextCapitalization.words,
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Renunță'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Salvează'),
-          ),
-        ],
-      ),
-    );
-    if (ok == true && mounted) {
-      final newName = ctrl.text;
-      // Caller handles applying.
-      Navigator.of(context).pop(newName);
-    }
-    ctrl.dispose();
-  }
-
   @override
   Widget build(BuildContext context) {
     final ctrl = context.watch<SimfController>();
+    final q = _norm(_query.trim());
+    final filtered = ctrl.players
+        .where((p) => q.isEmpty || _norm(p.name).contains(q))
+        .toList(growable: false);
+
+    int cmp(Player a, Player b) {
+      return switch (_sort) {
+        _PlayerSort.name => a.name.compareTo(b.name),
+        _PlayerSort.skill => b.conservativeSkill.compareTo(a.conservativeSkill),
+        _PlayerSort.goals =>
+          ctrl.goalsForPlayer(b.id).compareTo(ctrl.goalsForPlayer(a.id)),
+        _PlayerSort.lastMatch =>
+          (ctrl.lastMatchAtForPlayer(b.id)?.millisecondsSinceEpoch ?? 0)
+              .compareTo(
+                (ctrl.lastMatchAtForPlayer(a.id)?.millisecondsSinceEpoch ?? 0),
+              ),
+      };
+    }
+    final players = [...filtered]..sort(cmp);
 
     return Scaffold(
       appBar: AppBar(
@@ -135,6 +190,67 @@ class _PlayerListScreenState extends State<PlayerListScreen> {
           ],
         ),
         actions: [
+          if (kDebugMode)
+            PopupMenuButton<_TopAction>(
+              tooltip: 'Dev tools',
+              onSelected: (v) async {
+                if (v == _TopAction.devSeed) {
+                  await context.read<SimfController>().devSeedDemo();
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Demo seed creat (jucători + 1 meci).'),
+                      behavior: SnackBarBehavior.floating,
+                      margin: EdgeInsets.fromLTRB(12, 0, 12, 24),
+                    ),
+                  );
+                } else if (v == _TopAction.devClearSeed) {
+                  await context.read<SimfController>().devClearDemoSeed();
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Demo seed șters.'),
+                      behavior: SnackBarBehavior.floating,
+                      margin: EdgeInsets.fromLTRB(12, 0, 12, 24),
+                    ),
+                  );
+                }
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  value: _TopAction.devSeed,
+                  child: Text('Creează demo seed'),
+                ),
+                PopupMenuItem(
+                  value: _TopAction.devClearSeed,
+                  child: Text('Șterge demo seed'),
+                ),
+              ],
+              icon: const Icon(Icons.developer_mode),
+            ),
+          PopupMenuButton<_PlayerSort>(
+            tooltip: 'Sortare',
+            initialValue: _sort,
+            onSelected: (v) => setState(() => _sort = v),
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: _PlayerSort.name, child: Text('Nume')),
+              PopupMenuItem(value: _PlayerSort.skill, child: Text('Skill')),
+              PopupMenuItem(value: _PlayerSort.lastMatch, child: Text('Ultimul meci')),
+              PopupMenuItem(value: _PlayerSort.goals, child: Text('Goluri')),
+            ],
+            icon: const Icon(Icons.sort),
+          ),
+          IconButton(
+            tooltip: 'Istoric meciuri',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const MatchHistoryScreen(),
+                ),
+              );
+            },
+            icon: const Icon(Icons.history_rounded),
+          ),
           IconButton(
             tooltip: 'Meci nou',
             onPressed: () {
@@ -153,57 +269,127 @@ class _PlayerListScreenState extends State<PlayerListScreen> {
           ),
         ],
       ),
-      body: RefreshIndicator(
-        color: SimfTheme.pitchGreenLight,
-        onRefresh: ctrl.loadPlayers,
-        child: ListView.builder(
-          padding: const EdgeInsets.only(bottom: 88),
-          itemCount: ctrl.players.length,
-          itemBuilder: (context, index) {
-            final p = ctrl.players[index];
-            return ListTile(
-              leading: CircleAvatar(
-                backgroundColor: Colors.white.withValues(alpha: 0.08),
-                child: const Icon(Icons.person_outline, color: Colors.white70),
-              ),
-              title: Text(p.name),
-              onTap: () async {
-                final nameCtrl = TextEditingController(text: p.name);
-                final ok = await showDialog<bool>(
-                  context: context,
-                  builder: (ctx) => AlertDialog(
-                    title: const Text('Editează numele'),
-                    content: TextField(
-                      controller: nameCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Nume',
-                        border: OutlineInputBorder(),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              SimfTheme.pitchGreen.withValues(alpha: 0.18),
+              SimfTheme.surface,
+              SimfTheme.teamBlue.withValues(alpha: 0.10),
+            ],
+          ),
+        ),
+        child: SafeArea(
+          child: RefreshIndicator(
+            color: SimfTheme.pitchGreenLight,
+            onRefresh: ctrl.loadPlayers,
+            child: ListView.builder(
+              padding: const EdgeInsets.only(bottom: 24),
+              itemCount: players.length + 1,
+              itemBuilder: (context, index) {
+                if (index == 0) {
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                    child: TextField(
+                      controller: _searchCtrl,
+                      onChanged: (v) => setState(() => _query = v),
+                      decoration: InputDecoration(
+                        prefixIcon: const Icon(Icons.search),
+                        hintText: 'Caută jucător…',
+                        suffixIcon: _query.isEmpty
+                            ? null
+                            : IconButton(
+                                tooltip: 'Șterge',
+                                onPressed: () => setState(() {
+                                  _query = '';
+                                  _searchCtrl.text = '';
+                                }),
+                                icon: const Icon(Icons.clear),
+                              ),
                       ),
-                      textCapitalization: TextCapitalization.words,
-                      autofocus: true,
                     ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(ctx, false),
-                        child: const Text('Renunță'),
-                      ),
-                      FilledButton(
-                        onPressed: () => Navigator.pop(ctx, true),
-                        child: const Text('Salvează'),
-                      ),
-                    ],
-                  ),
-                );
-                final newName = nameCtrl.text;
-                nameCtrl.dispose();
-                if (ok == true && context.mounted) {
-                  await context.read<SimfController>().renamePlayer(
-                        player: p,
-                        newName: newName,
-                      );
+                  );
                 }
-              },
-              subtitle: Wrap(
+
+                final p = players[index - 1];
+                return Card(
+                  margin:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  child: ListTile(
+                    leading: Tooltip(
+                      message: p.isPermanentGk
+                          ? 'Portar permanent — apasă pentru profil'
+                          : 'Apasă pentru profil',
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Container(
+                            width: 46,
+                            height: 46,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: _avatarGradient(p),
+                              ),
+                              border: Border.all(
+                                color: SimfTheme.outline.withValues(alpha: 0.8),
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.28),
+                                  blurRadius: 5,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: Center(
+                              child: Text(
+                                _initials(p.name),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          ),
+                          if (p.isPermanentGk)
+                            Positioned(
+                              right: -3,
+                              bottom: -3,
+                              child: Container(
+                                padding: const EdgeInsets.all(3),
+                                decoration: BoxDecoration(
+                                  color: SimfTheme.amber.withValues(alpha: 0.95),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: SimfTheme.surface,
+                                    width: 1.5,
+                                  ),
+                                ),
+                                child: Icon(
+                                  Icons.sports_handball,
+                                  size: 12,
+                                  color: SimfTheme.surface,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    title: Text(p.name),
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => PlayerProfileScreen(playerId: p.id),
+                        ),
+                      );
+                    },
+                    subtitle: Wrap(
                 spacing: 10,
                 runSpacing: 4,
                 crossAxisAlignment: WrapCrossAlignment.center,
@@ -240,6 +426,21 @@ class _PlayerListScreenState extends State<PlayerListScreen> {
                       ],
                     ),
                   ),
+                  Tooltip(
+                    message: 'Skill conservator (μ − 3σ). Folosit pentru echilibrări.',
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.stars_outlined,
+                          size: 16,
+                          color: SimfTheme.amber,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(p.conservativeSkill.toStringAsFixed(1)),
+                      ],
+                    ),
+                  ),
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -261,98 +462,137 @@ class _PlayerListScreenState extends State<PlayerListScreen> {
                         color: Colors.white60,
                       ),
                       const SizedBox(width: 4),
-                      Text('goluri: ${ctrl.goalsForPlayer(p.id)}'),
+                      Text(
+                        'goluri: ${ctrl.goalsForPlayer(p.id)} '
+                        '(${ctrl.goalsPerMatchForPlayer(p.id).toStringAsFixed(2)}/meci)',
+                      ),
                     ],
                   ),
-                  if (p.isPermanentGk)
-                    const Row(
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.history,
+                        size: 16,
+                        color: Colors.white60,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'ultimul: ${_relativeDays(ctrl.lastMatchAtForPlayer(p.id))}',
+                      ),
+                    ],
+                  ),
+                  if (ctrl.mvpCountForPlayer(p.id) > 0)
+                    Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(
-                          Icons.sports_handball,
-                          size: 16,
-                          color: Colors.amber,
-                        ),
-                        SizedBox(width: 4),
-                        Text('GK'),
+                        const Icon(Icons.star, size: 16, color: SimfTheme.amber),
+                        const SizedBox(width: 4),
+                        Text('${ctrl.mvpCountForPlayer(p.id)}'),
+                      ],
+                    ),
+                  if (ctrl.gkOfMatchCountForPlayer(p.id) > 0)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.shield, size: 16, color: SimfTheme.amber),
+                        const SizedBox(width: 4),
+                        Text('${ctrl.gkOfMatchCountForPlayer(p.id)}'),
                       ],
                     ),
                 ],
               ),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    tooltip: 'Editează',
-                    icon: const Icon(Icons.edit_outlined),
-                    onPressed: () async {
-                      final nameCtrl = TextEditingController(text: p.name);
-                      final ok = await showDialog<bool>(
-                        context: context,
-                        builder: (ctx) => AlertDialog(
-                          title: const Text('Editează numele'),
-                          content: TextField(
-                            controller: nameCtrl,
-                            decoration: const InputDecoration(
-                              labelText: 'Nume',
-                              border: OutlineInputBorder(),
-                            ),
-                            textCapitalization: TextCapitalization.words,
-                            autofocus: true,
+                    trailing: PopupMenuButton<_PlayerRowAction>(
+                tooltip: 'Acțiuni',
+                onSelected: (a) async {
+                  if (a == _PlayerRowAction.rename) {
+                    final nameCtrl = TextEditingController(text: p.name);
+                    final ok = await showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('Editează numele'),
+                        content: TextField(
+                          controller: nameCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Nume',
+                            border: OutlineInputBorder(),
                           ),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(ctx, false),
-                              child: const Text('Renunță'),
-                            ),
-                            FilledButton(
-                              onPressed: () => Navigator.pop(ctx, true),
-                              child: const Text('Salvează'),
-                            ),
-                          ],
+                          textCapitalization: TextCapitalization.words,
+                          autofocus: true,
                         ),
-                      );
-                      final newName = nameCtrl.text;
-                      nameCtrl.dispose();
-                      if (ok == true && context.mounted) {
-                        await context.read<SimfController>().renamePlayer(
-                              player: p,
-                              newName: newName,
-                            );
-                      }
-                    },
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx, false),
+                            child: const Text('Renunță'),
+                          ),
+                          FilledButton(
+                            onPressed: () => Navigator.pop(ctx, true),
+                            child: const Text('Salvează'),
+                          ),
+                        ],
+                      ),
+                    );
+                    final newName = nameCtrl.text;
+                    nameCtrl.dispose();
+                    if (ok == true && context.mounted) {
+                      await context.read<SimfController>().renamePlayer(
+                            player: p,
+                            newName: newName,
+                          );
+                    }
+                  }
+                  if (a == _PlayerRowAction.delete && context.mounted) {
+                    final sure = await showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('Ștergi jucătorul?'),
+                        content: Text('${p.name} va fi eliminat din lista locală.'),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx, false),
+                            child: const Text('Nu'),
+                          ),
+                          FilledButton(
+                            onPressed: () => Navigator.pop(ctx, true),
+                            child: const Text('Da'),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (sure == true && context.mounted) {
+                      await context.read<SimfController>().deletePlayer(p);
+                    }
+                  }
+                },
+                itemBuilder: (context) => const [
+                  PopupMenuItem(
+                    value: _PlayerRowAction.rename,
+                    child: Row(
+                      children: [
+                        Icon(Icons.edit_outlined),
+                        SizedBox(width: 8),
+                        Text('Editează'),
+                      ],
+                    ),
                   ),
-                  IconButton(
-                    tooltip: 'Șterge',
-                    icon: const Icon(Icons.delete_outline),
-                    onPressed: () async {
-                      final sure = await showDialog<bool>(
-                        context: context,
-                        builder: (ctx) => AlertDialog(
-                          title: const Text('Ștergi jucătorul?'),
-                          content:
-                              Text('${p.name} va fi eliminat din lista locală.'),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(ctx, false),
-                              child: const Text('Nu'),
-                            ),
-                            FilledButton(
-                              onPressed: () => Navigator.pop(ctx, true),
-                              child: const Text('Da'),
-                            ),
-                          ],
-                        ),
-                      );
-                      if (sure == true && context.mounted) {
-                        await context.read<SimfController>().deletePlayer(p);
-                      }
-                    },
+                  PopupMenuItem(
+                    value: _PlayerRowAction.delete,
+                    child: Row(
+                      children: [
+                        Icon(Icons.delete_outline),
+                        SizedBox(width: 8),
+                        Text('Șterge'),
+                      ],
+                    ),
                   ),
                 ],
-              ),
-            );
-          },
+                      icon: const Icon(Icons.more_vert),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
         ),
       ),
       floatingActionButton: null,

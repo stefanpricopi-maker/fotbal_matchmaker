@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
@@ -34,14 +36,31 @@ class SimfController extends ChangeNotifier {
   MatchmakingResult? _lastMatch;
   String? _lastError;
   bool _loading = false;
-  Map<String, int> _goalsByPlayerId = const {};
+  Map<String, ({
+    int goals,
+    int matches,
+    int mvpCount,
+    int gkOfMatchCount,
+    DateTime? lastMatchAt,
+  })> _aggByPlayerId = const {};
 
   List<Player> get players => List.unmodifiable(_players);
   Set<String> get selectedIds => Set.unmodifiable(_selectedIds);
   MatchmakingResult? get lastMatch => _lastMatch;
   String? get lastError => _lastError;
   bool get isLoading => _loading;
-  int goalsForPlayer(String playerId) => _goalsByPlayerId[playerId] ?? 0;
+  int goalsForPlayer(String playerId) => _aggByPlayerId[playerId]?.goals ?? 0;
+  int mvpCountForPlayer(String playerId) =>
+      _aggByPlayerId[playerId]?.mvpCount ?? 0;
+  int gkOfMatchCountForPlayer(String playerId) =>
+      _aggByPlayerId[playerId]?.gkOfMatchCount ?? 0;
+  DateTime? lastMatchAtForPlayer(String playerId) =>
+      _aggByPlayerId[playerId]?.lastMatchAt;
+  double goalsPerMatchForPlayer(String playerId) {
+    final a = _aggByPlayerId[playerId];
+    if (a == null || a.matches <= 0) return 0;
+    return a.goals / a.matches;
+  }
 
   LocalStore get localStore => _local;
 
@@ -70,7 +89,7 @@ class SimfController extends ChangeNotifier {
           final pending = await _local.getUnsyncedMatches();
           for (final m in pending) {
             final stats = await _local.getStatsForMatch(m.id);
-            await _supabase.insertMatchWithStats(match: m, stats: stats);
+            await _supabase.upsertMatchWithStats(match: m, stats: stats);
             await _local.markMatchSynced(m.id);
           }
         } on SimfException catch (e) {
@@ -82,23 +101,40 @@ class SimfController extends ChangeNotifier {
         try {
           final remote = await _supabase.fetchPlayers();
           final remoteById = {for (final p in remote) p.id: p};
-          final remoteIds = remoteById.keys.toSet();
+          final localById = {for (final p in local) p.id: p};
+          final allIds = {...remoteById.keys, ...localById.keys};
 
-          // Remote ca sursă pentru aceleași id-uri; păstrăm jucători existenți doar pe device.
+          Player pickLww(Player? a, Player? b) {
+            if (a == null) return b!;
+            if (b == null) return a;
+            final ta = a.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final tb = b.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            // last-write-wins; tie-break: remote wins (stable).
+            if (tb.isAfter(ta)) return b;
+            if (ta.isAfter(tb)) return a;
+            return b;
+          }
+
           final merged = <Player>[
-            ...remote,
-            for (final lp in local)
-              if (!remoteIds.contains(lp.id)) lp,
+            for (final id in allIds) pickLww(localById[id], remoteById[id]),
           ];
           merged.sort((a, b) => a.name.compareTo(b.name));
           await _local.replaceAllPlayers(merged);
 
-          for (final p in merged) {
-            if (!remoteIds.contains(p.id)) {
+          // Push local-newer snapshots to remote (best-effort).
+          for (final id in allIds) {
+            final lp = localById[id];
+            final rp = remoteById[id];
+            if (lp == null) continue;
+            final tl = lp.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final tr = rp?.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            if (rp == null || tl.isAfter(tr)) {
               try {
-                await _supabase.upsertPlayer(p);
+                await _supabase.upsertPlayer(lp);
               } on SimfException catch (e) {
                 _lastError = e.message;
+              } catch (_) {
+                // best-effort
               }
             }
           }
@@ -117,9 +153,17 @@ class SimfController extends ChangeNotifier {
           // #endregion
           _lastError = 'Eroare rețea / TLS la Supabase: $e';
         }
+
+        try {
+          await _mergeRemoteMatchesLww();
+        } on SimfException catch (e) {
+          _lastError = e.message;
+        } catch (e) {
+          _lastError = 'Nu s-au putut îmbina meciurile din cloud: $e';
+        }
       }
       _players = local;
-      _goalsByPlayerId = await _local.getGoalsByPlayerId();
+      _aggByPlayerId = await _local.getPlayerAggregates();
     } catch (e, st) {
       _lastError = 'Nu s-au putut încărca jucătorii: $e';
       debugPrintStack(stackTrace: st);
@@ -139,6 +183,7 @@ class SimfController extends ChangeNotifier {
       id: _uuid.v4(),
       name: trimmed,
       isPermanentGk: isPermanentGk,
+      updatedAt: DateTime.now().toUtc(),
     );
 
     await _local.upsertPlayer(p);
@@ -161,7 +206,7 @@ class SimfController extends ChangeNotifier {
     final trimmed = newName.trim();
     if (trimmed.isEmpty || trimmed == player.name) return;
 
-    final updated = player.copyWith(name: trimmed);
+    final updated = player.copyWith(name: trimmed, updatedAt: DateTime.now().toUtc());
     await _local.upsertPlayer(updated);
     if (_supabase.isReady) {
       try {
@@ -246,9 +291,11 @@ class SimfController extends ChangeNotifier {
       throw SimfException('Nu există echipe generate pentru acest meci.');
     }
 
+    final now = DateTime.now().toUtc();
     final m = Match(
       id: _uuid.v4(),
-      createdAt: DateTime.now().toUtc(),
+      createdAt: now,
+      updatedAt: now,
       scoreA: scoreA,
       scoreB: scoreB,
     );
@@ -258,10 +305,9 @@ class SimfController extends ChangeNotifier {
               playerId: s.playerId,
               team: s.team,
               goals: s.goals,
-              saves: s.saves,
               isRotationGk: s.isRotationGk,
               receivedMvpVote: s.receivedMvpVote,
-              cleanSheet: s.cleanSheet,
+              receivedGkVote: s.receivedGkVote,
             ))
         .toList(growable: false);
 
@@ -275,7 +321,11 @@ class SimfController extends ChangeNotifier {
       teamB: match.teamB,
     );
 
-    for (final p in updated) {
+    final updatedWithTs = updated
+        .map((p) => p.copyWith(updatedAt: now))
+        .toList(growable: false);
+
+    for (final p in updatedWithTs) {
       await _local.upsertPlayer(p);
     }
 
@@ -284,16 +334,16 @@ class SimfController extends ChangeNotifier {
 
     if (_supabase.isReady) {
       try {
-        await _supabase.upsertPlayers(updated);
-        await _supabase.insertMatchWithStats(match: m, stats: withIds);
+        await _supabase.upsertPlayers(updatedWithTs);
+        await _supabase.upsertMatchWithStats(match: m, stats: withIds);
         await _local.markMatchSynced(m.id);
       } on SimfException catch (e) {
         _lastError = e.message;
       }
     }
 
-    _players = updated..sort((a, b) => a.name.compareTo(b.name));
-    _goalsByPlayerId = await _local.getGoalsByPlayerId();
+    _players = updatedWithTs..sort((a, b) => a.name.compareTo(b.name));
+    _aggByPlayerId = await _local.getPlayerAggregates();
     _lastMatch = null;
     _selectedIds.clear();
     notifyListeners();
@@ -302,5 +352,215 @@ class SimfController extends ChangeNotifier {
   void _setLoading(bool v) {
     _loading = v;
     notifyListeners();
+  }
+
+  /// Îmbină meciurile remote cu SQLite (LWW pe `updated_at` / `created_at`).
+  Future<void> _mergeRemoteMatchesLww() async {
+    final remoteMatches = await _supabase.fetchMatches();
+    final allStats = await _supabase.fetchAllMatchPlayerStats();
+    final statsByMatchId = <String, List<MatchPlayerStats>>{};
+    for (final s in allStats) {
+      statsByMatchId.putIfAbsent(s.matchId, () => []).add(s);
+    }
+
+    final localRows = await _local.getAllMatchesWithSync();
+    final localById = {for (final r in localRows) r.match.id: r};
+
+    for (final r in remoteMatches) {
+      final remoteStats = statsByMatchId[r.id] ?? const <MatchPlayerStats>[];
+      final localRow = localById[r.id];
+      if (localRow == null) {
+        await _local.replaceMatchAndStats(
+          match: r,
+          stats: remoteStats,
+          synced: true,
+        );
+        continue;
+      }
+
+      final local = localRow.match;
+      final tl = (local.updatedAt ?? local.createdAt).toUtc();
+      final tr = (r.updatedAt ?? r.createdAt).toUtc();
+
+      if (!tr.isBefore(tl)) {
+        await _local.replaceMatchAndStats(
+          match: r,
+          stats: remoteStats,
+          synced: true,
+        );
+      } else if (localRow.synced) {
+        try {
+          final localStats = await _local.getStatsForMatch(local.id);
+          await _supabase.upsertMatchWithStats(
+            match: local,
+            stats: localStats,
+          );
+        } on SimfException catch (e) {
+          _lastError = e.message;
+        } catch (_) {
+          // best-effort
+        }
+      }
+    }
+  }
+
+  Future<void> devSeedDemo({
+    int playersCount = 14,
+  }) async {
+    if (!kDebugMode) return;
+
+    _setLoading(true);
+    try {
+      final r = math.Random(1337);
+
+      final existingNames = _players
+          .map((p) => p.name.trim().toLowerCase())
+          .toSet();
+
+      final created = <Player>[];
+      for (var i = 1; i <= playersCount; i++) {
+        final name = 'Demo ${i.toString().padLeft(2, '0')}';
+        if (existingNames.contains(name.toLowerCase())) continue;
+
+        final isPermGk = (i == 1 || i == 2);
+        final mu = 18.0 + r.nextDouble() * 14.0;
+        final sigma = 5.5 + r.nextDouble() * 3.0;
+
+        final p = Player(
+          id: _uuid.v4(),
+          name: name,
+          mu: mu,
+          sigma: sigma,
+          isPermanentGk: isPermGk,
+          matchesPlayed: 0,
+        );
+        await _local.upsertPlayer(p);
+        created.add(p);
+
+        if (_supabase.isReady) {
+          try {
+            await _supabase.upsertPlayer(p);
+          } catch (_) {
+            // best-effort
+          }
+        }
+      }
+
+      final roster = [..._players, ...created]..sort((a, b) => a.name.compareTo(b.name));
+      _players = roster;
+
+      final participants = roster
+          .where((p) => p.name.toLowerCase().startsWith('demo '))
+          .take(playersCount)
+          .toList(growable: false);
+      if (participants.length < 2) return;
+
+      final teams = _matchmaking.balanceTeams(participants);
+      final scoreA = 5;
+      final scoreB = 4;
+
+      final matchId = _uuid.v4();
+      final mNow = DateTime.now().toUtc();
+      final m = Match(
+        id: matchId,
+        createdAt: mNow,
+        updatedAt: mNow,
+        scoreA: scoreA,
+        scoreB: scoreB,
+      );
+
+      final stats = <MatchPlayerStats>[];
+      var remainingA = scoreA;
+      var remainingB = scoreB;
+
+      for (var i = 0; i < teams.teamA.length; i++) {
+        final p = teams.teamA[i];
+        final g = i == 0 ? 2 : (remainingA > 0 && r.nextDouble() < 0.45 ? 1 : 0);
+        final goals = g.clamp(0, remainingA);
+        remainingA -= goals;
+        stats.add(
+          MatchPlayerStats(
+            matchId: matchId,
+            playerId: p.id,
+            team: MatchTeam.a,
+            goals: goals,
+            isRotationGk: !p.isPermanentGk && i == 1,
+            receivedMvpVote: i == 0,
+            receivedGkVote: (!p.isPermanentGk && i == 1),
+          ),
+        );
+      }
+      for (var i = 0; i < teams.teamB.length; i++) {
+        final p = teams.teamB[i];
+        final g = i == 0 ? 2 : (remainingB > 0 && r.nextDouble() < 0.45 ? 1 : 0);
+        final goals = g.clamp(0, remainingB);
+        remainingB -= goals;
+        stats.add(
+          MatchPlayerStats(
+            matchId: matchId,
+            playerId: p.id,
+            team: MatchTeam.b,
+            goals: goals,
+            isRotationGk: !p.isPermanentGk && i == 1,
+            receivedMvpVote: i == 0,
+          ),
+        );
+      }
+      if (remainingA > 0) {
+        final idx = stats.indexWhere((s) => s.team == MatchTeam.a);
+        if (idx >= 0) {
+          stats[idx] = stats[idx].copyWith(goals: stats[idx].goals + remainingA);
+        }
+      }
+      if (remainingB > 0) {
+        final idx = stats.indexWhere((s) => s.team == MatchTeam.b);
+        if (idx >= 0) {
+          stats[idx] = stats[idx].copyWith(goals: stats[idx].goals + remainingB);
+        }
+      }
+
+      await _local.insertMatchWithStats(match: m, stats: stats, synced: false);
+
+      final statsById = {for (final s in stats) s.playerId: s};
+      final updated = _ranking.applyMatchToPlayers(
+        roster: roster,
+        scoreA: scoreA,
+        scoreB: scoreB,
+        statsByPlayerId: statsById,
+        teamA: teams.teamA,
+        teamB: teams.teamB,
+      );
+      for (final p in updated) {
+        await _local.upsertPlayer(p);
+      }
+      if (_supabase.isReady) {
+        try {
+          await _supabase.upsertPlayers(updated);
+          await _supabase.upsertMatchWithStats(match: m, stats: stats);
+          await _local.markMatchSynced(matchId);
+        } catch (_) {
+          // best-effort
+        }
+      }
+
+      _players = updated..sort((a, b) => a.name.compareTo(b.name));
+      _aggByPlayerId = await _local.getPlayerAggregates();
+      notifyListeners();
+    } finally {
+      _setLoading(false);
+    }
+  }
+
+  Future<void> devClearDemoSeed() async {
+    if (!kDebugMode) return;
+    _setLoading(true);
+    try {
+      await _local.deleteDemoSeed();
+      _players = await _local.getPlayers();
+      _aggByPlayerId = await _local.getPlayerAggregates();
+      notifyListeners();
+    } finally {
+      _setLoading(false);
+    }
   }
 }

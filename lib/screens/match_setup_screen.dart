@@ -22,6 +22,7 @@ class MatchSetupScreen extends StatefulWidget {
 class _MatchSetupScreenState extends State<MatchSetupScreen> {
   final TextEditingController _pasteCtrl = TextEditingController();
   bool _importBusy = false;
+  bool _autoCreateMissing = true;
 
   @override
   void dispose() {
@@ -156,18 +157,24 @@ class _MatchSetupScreenState extends State<MatchSetupScreen> {
             children: [
               Text('Din WhatsApp: "$typedName"'),
               const SizedBox(height: 12),
-              ...candidates.map(
-                (p) => RadioListTile<Player>(
-                  value: p,
-                  groupValue: picked,
-                  onChanged: (v) {
-                    if (v == null) return;
-                    setLocal(() => picked = v);
-                  },
-                  title: Text(p.name),
-                  subtitle: Text(
-                    'μ=${p.mu.toStringAsFixed(1)}  σ=${p.sigma.toStringAsFixed(1)}',
-                  ),
+              RadioGroup<Player>(
+                groupValue: picked,
+                onChanged: (v) {
+                  if (v == null) return;
+                  setLocal(() => picked = v);
+                },
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final p in candidates)
+                      RadioListTile<Player>(
+                        value: p,
+                        title: Text(p.name),
+                        subtitle: Text(
+                          'μ=${p.mu.toStringAsFixed(1)}  σ=${p.sigma.toStringAsFixed(1)}',
+                        ),
+                      ),
+                  ],
                 ),
               ),
             ],
@@ -325,21 +332,23 @@ class _MatchSetupScreenState extends State<MatchSetupScreen> {
                     SizedBox(
                       width: double.maxFinite,
                       height: 260,
-                      child: ListView.builder(
-                        itemCount: options.length,
-                        itemBuilder: (context, i) {
-                          final p = options[i].$1;
-                          final score = options[i].$2;
-                          return RadioListTile<Player>(
-                            value: p,
-                            groupValue: picked,
-                            onChanged: (v) => setLocal(() => picked = v),
-                            title: Text(p.name),
-                            subtitle: Text(
-                              'Asemănare: ${(score * 100).toStringAsFixed(0)}%  •  μ=${p.mu.toStringAsFixed(1)}',
-                            ),
-                          );
-                        },
+                      child: RadioGroup<Player>(
+                        groupValue: picked,
+                        onChanged: (v) => setLocal(() => picked = v),
+                        child: ListView.builder(
+                          itemCount: options.length,
+                          itemBuilder: (context, i) {
+                            final p = options[i].$1;
+                            final score = options[i].$2;
+                            return RadioListTile<Player>(
+                              value: p,
+                              title: Text(p.name),
+                              subtitle: Text(
+                                'Asemănare: ${(score * 100).toStringAsFixed(0)}%  •  μ=${p.mu.toStringAsFixed(1)}',
+                              ),
+                            );
+                          },
+                        ),
                       ),
                     ),
                 ],
@@ -361,16 +370,38 @@ class _MatchSetupScreenState extends State<MatchSetupScreen> {
     );
   }
 
+  void _showImportMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+      ),
+    );
+  }
+
   Future<void> _importFromWhatsApp() async {
+    FocusManager.instance.primaryFocus?.unfocus();
     final ctrl = context.read<SimfController>();
     final store = ctrl.localStore;
     final raw = _pasteCtrl.text;
     final names = _parseWhatsAppNames(raw);
-    if (names.isEmpty) return;
+    if (names.isEmpty) {
+      _showImportMessage(
+        'Nu am găsit niciun nume. Lipește lista în câmp (textul gri „Ex:” nu se numără) sau scrie câte un nume pe rând.',
+      );
+      return;
+    }
 
     setState(() => _importBusy = true);
     try {
       final selected = <String>{};
+      var aliasHits = 0;
+      var exactHits = 0;
+      var manualPicks = 0;
+      var autoCreated = 0;
+      var skipped = 0;
 
       for (final typed in names) {
         final extracted = _extractNameAndHints(typed);
@@ -382,6 +413,7 @@ class _MatchSetupScreenState extends State<MatchSetupScreen> {
           final p = ctrl.players.where((e) => e.id == aliasId).firstOrNull;
           if (p != null) {
             selected.add(p.id);
+            aliasHits++;
             continue;
           }
         }
@@ -392,21 +424,39 @@ class _MatchSetupScreenState extends State<MatchSetupScreen> {
             .toList(growable: false);
 
         if (candidates.isEmpty) {
-          // Nu avem match exact → modală cu sugestii (fuzzy) + căutare manuală.
-          final picked = await _askPickFuzzy(
-            typedName: typed,
-            allPlayers: ctrl.players,
-            suggestedName: extracted.baseName,
-            suggestedPermanentGk: extracted.hintPermanentGk,
-          );
-          if (picked != null) {
-            selected.add(picked.id);
-            await store.upsertAlias(alias: aliasKey, playerId: picked.id);
+          if (_autoCreateMissing) {
+            final created = await ctrl.addPlayer(
+              name: extracted.baseName,
+              isPermanentGk: extracted.hintPermanentGk,
+            );
+            if (created != null) {
+              selected.add(created.id);
+              autoCreated++;
+              await store.upsertAlias(alias: aliasKey, playerId: created.id);
+            } else {
+              skipped++;
+            }
+          } else {
+            // Nu avem match exact → modală cu sugestii (fuzzy) + căutare manuală.
+            final picked = await _askPickFuzzy(
+              typedName: typed,
+              allPlayers: ctrl.players,
+              suggestedName: extracted.baseName,
+              suggestedPermanentGk: extracted.hintPermanentGk,
+            );
+            if (picked != null) {
+              selected.add(picked.id);
+              manualPicks++;
+              await store.upsertAlias(alias: aliasKey, playerId: picked.id);
+            } else {
+              skipped++;
+            }
           }
           continue;
         }
         if (candidates.length == 1) {
           selected.add(candidates[0].id);
+          exactHits++;
           await store.upsertAlias(alias: aliasKey, playerId: candidates[0].id);
           continue;
         }
@@ -417,23 +467,253 @@ class _MatchSetupScreenState extends State<MatchSetupScreen> {
         );
         if (picked != null) {
           selected.add(picked.id);
+          manualPicks++;
           await store.upsertAlias(alias: aliasKey, playerId: picked.id);
+        } else {
+          skipped++;
         }
       }
 
       ctrl.setSelection(selected);
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Import: ${selected.length}/${names.length} selectați.'),
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.fromLTRB(12, 0, 12, 110),
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Import finalizat'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('Total: ${names.length}'),
+              const SizedBox(height: 8),
+              Text('Selectați: ${selected.length}'),
+              const SizedBox(height: 8),
+              Text('Alias (auto): $aliasHits'),
+              Text('Match exact (auto): $exactHits'),
+              Text('Ales manual: $manualPicks'),
+              Text('Creați automat: $autoCreated'),
+              Text('Săriți: $skipped'),
+            ],
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('OK'),
+            ),
+          ],
         ),
       );
+    } catch (e, st) {
+      debugPrint('Import WhatsApp eșuat: $e\n$st');
+      if (mounted) {
+        _showImportMessage('Import eșuat: $e');
+      }
     } finally {
       if (mounted) setState(() => _importBusy = false);
     }
+  }
+
+  Widget _autoCreateTile(BuildContext context) {
+    final subtitleStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: Colors.white60,
+        );
+    return SwitchListTile.adaptive(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+      value: _autoCreateMissing,
+      onChanged: _importBusy
+          ? null
+          : (v) => setState(() => _autoCreateMissing = v),
+      secondary: Icon(
+        Icons.person_add_alt_1_outlined,
+        color: SimfTheme.pitchGreenLight.withValues(alpha: 0.95),
+      ),
+      title: const Text('Jucători noi automat'),
+      subtitle: Text(
+        'Dacă un nume nu există în app, îl creează fără să te întrebe.',
+        style: subtitleStyle,
+      ),
+    );
+  }
+
+  Widget _pasteEditorCard(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.forum_outlined,
+                  size: 22,
+                  color: SimfTheme.pitchGreenLight.withValues(alpha: 0.95),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Mesajul de pe grup',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Lipește lista: câte un nume pe rând. Pentru portar poți folosi „(portar)” sau GK în text.',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: Colors.white70,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Expanded(
+              child: TextField(
+                controller: _pasteCtrl,
+                maxLines: null,
+                expands: true,
+                textAlignVertical: TextAlignVertical.top,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(
+                  alignLabelWithHint: true,
+                  hintText:
+                      'Dan Nicoară\nJoshua\nAlex (portar)\n…',
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _generateTeams(SimfController ctrl) {
+    try {
+      ctrl.generateTeams();
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => const MatchPreviewScreen(),
+        ),
+      );
+    } on SimfException catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    }
+  }
+
+  Widget _importButton() {
+    return FilledButton.icon(
+      onPressed: _importBusy ? null : _importFromWhatsApp,
+      icon: _importBusy
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.playlist_add_check_rounded),
+      label: const Text('Importă în selecția meciului'),
+    );
+  }
+
+  Widget _generateButton(SimfController ctrl) {
+    final n = ctrl.selectedIds.length;
+    final ready = n >= 2;
+    return FilledButton.icon(
+      style: FilledButton.styleFrom(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        backgroundColor: ready ? null : SimfTheme.surface2,
+        foregroundColor: ready ? null : Colors.white54,
+      ),
+      onPressed: !ready ? null : () => _generateTeams(ctrl),
+      icon: const Icon(Icons.shuffle_rounded),
+      label: Text(ready ? 'Generare echipe ($n)' : 'Generare echipe (min. 2)'),
+    );
+  }
+
+  Widget _clearButton() {
+    return OutlinedButton.icon(
+      onPressed: _importBusy
+          ? null
+          : () => setState(() => _pasteCtrl.clear()),
+      icon: const Icon(Icons.backspace_outlined, size: 20),
+      label: const Text('Golește câmpul'),
+    );
+  }
+
+  Widget _selectionHint(SimfController ctrl) {
+    final n = ctrl.selectedIds.length;
+    final theme = Theme.of(context);
+    return Text(
+      n == 0
+          ? 'După import vei vedea câți jucători sunt selectați pentru meci.'
+          : '$n jucători selectați pentru următorul meci.',
+      style: theme.textTheme.bodySmall?.copyWith(color: Colors.white60),
+    );
+  }
+
+  Widget _actionsPanel(
+    BuildContext context,
+    SimfController ctrl, {
+    bool fillVertical = false,
+  }) {
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: fillVertical ? MainAxisSize.max : MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(left: 4, right: 4, top: 4),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.touch_app_outlined,
+                    size: 20,
+                    color: SimfTheme.amber.withValues(alpha: 0.85),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Pași',
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6),
+            _importButton(),
+            const SizedBox(height: 10),
+            _generateButton(ctrl),
+            const SizedBox(height: 8),
+            _clearButton(),
+            const SizedBox(height: 10),
+            Divider(height: 1, color: SimfTheme.outline.withValues(alpha: 0.65)),
+            _autoCreateTile(context),
+            const SizedBox(height: 4),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: _selectionHint(ctrl),
+            ),
+            if (fillVertical) const Spacer(),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -444,130 +724,58 @@ class _MatchSetupScreenState extends State<MatchSetupScreen> {
       appBar: AppBar(
         title: const Text('Adaugă listă jucători pentru joc'),
       ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'Lipește lista de pe WhatsApp (un nume per rând).',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _pasteCtrl,
-                  minLines: 3,
-                  maxLines: 6,
-                  textCapitalization: TextCapitalization.words,
-                  decoration: const InputDecoration(
-                    hintText: 'Ex:\nAlex Z\nAnas\nCristi C',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: _importBusy ? null : _importFromWhatsApp,
-                        icon: _importBusy
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : const Icon(Icons.playlist_add_check),
-                        label: Text(_importBusy ? 'Se importă…' : 'Importă și bifează'),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              SimfTheme.pitchGreen.withValues(alpha: 0.18),
+              SimfTheme.surface,
+              SimfTheme.teamBlue.withValues(alpha: 0.10),
+            ],
+          ),
+        ),
+        child: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              const outer = EdgeInsets.fromLTRB(16, 10, 16, 16);
+              final wide = constraints.maxWidth >= 760;
+
+              if (wide) {
+                return Padding(
+                  padding: outer,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(
+                        flex: 58,
+                        child: _pasteEditorCard(context),
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    IconButton(
-                      tooltip: 'Curăță',
-                      onPressed: _importBusy
-                          ? null
-                          : () => setState(() => _pasteCtrl.text = ''),
-                      icon: const Icon(Icons.clear),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Selectează prezenții (${ctrl.selectedIds.length}/${ctrl.players.length})',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                ),
-                TextButton(
-                  onPressed: ctrl.players.isEmpty ? null : ctrl.selectAllVisible,
-                  child: const Text('Toți'),
-                ),
-                TextButton(
-                  onPressed: ctrl.clearSelection,
-                  child: const Text('Reset'),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: ListView.builder(
-              itemCount: ctrl.players.length,
-              itemBuilder: (context, index) {
-                final p = ctrl.players[index];
-                final selected = ctrl.selectedIds.contains(p.id);
-                return CheckboxListTile(
-                  value: selected,
-                  onChanged: (_) => ctrl.toggleSelected(p.id),
-                  title: Text(p.name),
-                  secondary: p.isPermanentGk
-                      ? const Icon(Icons.sports_soccer, color: Colors.amber)
-                      : null,
-                  subtitle: Text(
-                    'Ordinal: ${p.conservativeSkill.toStringAsFixed(1)}',
+                      const SizedBox(width: 16),
+                      Expanded(
+                        flex: 34,
+                        child: _actionsPanel(context, ctrl, fillVertical: true),
+                      ),
+                    ],
                   ),
                 );
-              },
-            ),
-          ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                  ),
-                  onPressed: ctrl.selectedIds.length < 2
-                      ? null
-                      : () {
-                          try {
-                            ctrl.generateTeams();
-                            Navigator.of(context).push(
-                              MaterialPageRoute<void>(
-                                builder: (_) => const MatchPreviewScreen(),
-                              ),
-                            );
-                          } on SimfException catch (e) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text(e.message)),
-                            );
-                          }
-                        },
-                  icon: const Icon(Icons.shuffle),
-                  label: const Text('Generare echipe'),
+              }
+
+              return Padding(
+                padding: outer,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(child: _pasteEditorCard(context)),
+                    const SizedBox(height: 14),
+                    _actionsPanel(context, ctrl, fillVertical: false),
+                  ],
                 ),
-              ),
-            ),
+              );
+            },
           ),
-        ],
+        ),
       ),
     );
   }

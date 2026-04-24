@@ -203,25 +203,16 @@ class _MatchEntryScreenState extends State<MatchEntryScreen> {
               teamB: match.teamB,
             ) *
             100)
-        .clamp(0, 100);
+        .clamp(0.0, 100.0)
+        .toDouble();
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Introducere scor'),
-        actions: [
-          Center(
-            child: Padding(
-              padding: const EdgeInsets.only(right: 12),
-              child: Text(
-                'Șansă A: ${winPct.toStringAsFixed(0)}%',
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-            ),
-          ),
-        ],
       ),
       body: Column(
         children: [
+          _WinChanceChips(winPctA: winPct),
           _ScoreBar(
             scoreA: _scoreA,
             scoreB: _scoreB,
@@ -292,6 +283,57 @@ class _MatchEntryScreenState extends State<MatchEntryScreen> {
   }
 }
 
+/// Chip-uri pentru șansele de câștig (echitabil vizual pentru A și B).
+class _WinChanceChips extends StatelessWidget {
+  const _WinChanceChips({required this.winPctA});
+
+  final double winPctA;
+
+  @override
+  Widget build(BuildContext context) {
+    final a = winPctA.clamp(0.0, 100.0);
+    final b = (100.0 - a).clamp(0.0, 100.0);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Chip(
+              avatar: Icon(
+                Icons.trending_up,
+                size: 18,
+                color: SimfTheme.teamRed.withValues(alpha: 0.95),
+              ),
+              label: Text('Șansă A: ${a.toStringAsFixed(0)}%'),
+              side: BorderSide(
+                color: SimfTheme.teamRed.withValues(alpha: 0.45),
+              ),
+              backgroundColor: SimfTheme.teamRed.withValues(alpha: 0.14),
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Chip(
+              avatar: Icon(
+                Icons.trending_up,
+                size: 18,
+                color: SimfTheme.teamBlue.withValues(alpha: 0.95),
+              ),
+              label: Text('Șansă B: ${b.toStringAsFixed(0)}%'),
+              side: BorderSide(
+                color: SimfTheme.teamBlue.withValues(alpha: 0.45),
+              ),
+              backgroundColor: SimfTheme.teamBlue.withValues(alpha: 0.14),
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _TeamPanel extends StatelessWidget {
   const _TeamPanel({
     required this.title,
@@ -314,32 +356,69 @@ class _TeamPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: color.withValues(alpha: 0.08),
+      color: color.withValues(alpha: 0.06),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-            color: color.withValues(alpha: 0.25),
-            child: Text(
-              title,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontWeight: FontWeight.bold),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  color.withValues(alpha: 0.42),
+                  color.withValues(alpha: 0.12),
+                ],
+              ),
+              border: Border(
+                bottom: BorderSide(
+                  color: color.withValues(alpha: 0.55),
+                  width: 1,
+                ),
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
+              child: Text(
+                title,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.3,
+                      color: Colors.white,
+                      shadows: const [
+                        Shadow(
+                          blurRadius: 6,
+                          color: Colors.black38,
+                          offset: Offset(0, 1),
+                        ),
+                      ],
+                    ),
+              ),
             ),
           ),
           Expanded(
-            child: ListView(
-              children: lines
-                  .map(
-                    (line) => _PlayerRow(
-                      line: line,
-                      accent: color,
-                      onChanged: onChanged,
-                      onMvp: mvpEnabled ? () => onMvp(line) : null,
-                      onGkOfMatch: line.rotationGk ? () => onGkOfMatch(line) : null,
-                    ),
-                  )
-                  .toList(),
+            child: ListView.separated(
+              padding: const EdgeInsets.only(top: 6, bottom: 12),
+              itemCount: lines.length,
+              separatorBuilder: (context, index) => Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: Divider(
+                  height: 1,
+                  color: SimfTheme.outline.withValues(alpha: 0.45),
+                ),
+              ),
+              itemBuilder: (context, i) {
+                final line = lines[i];
+                return _PlayerRow(
+                  line: line,
+                  accent: color,
+                  onChanged: onChanged,
+                  onMvp: mvpEnabled ? () => onMvp(line) : null,
+                  onGkOfMatch:
+                      line.rotationGk ? () => onGkOfMatch(line) : null,
+                );
+              },
             ),
           ),
         ],
@@ -369,21 +448,47 @@ class _PlayerRow extends StatelessWidget {
     const iconSize = 22.0;
     const btnW = 40.0;
     const btnH = 40.0;
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    p.name,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: accent.withValues(alpha: 0.38),
+            width: 0.9,
+          ),
+          gradient: LinearGradient(
+            colors: [
+              accent.withValues(alpha: 0.14),
+              SimfTheme.surface2.withValues(alpha: 0.65),
+            ],
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.18),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      p.name,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                      ),
+                    ),
                   ),
-                ),
                 const Icon(Icons.sports_soccer, size: iconSize, color: Colors.white70),
                 const SizedBox(width: 2),
                 IconButton(
@@ -461,7 +566,8 @@ class _PlayerRow extends StatelessWidget {
                 ),
               ],
             ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -507,24 +613,50 @@ class _ScoreBar extends StatelessWidget {
     }
 
     return Material(
-      elevation: 4,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Row(
-          children: [
-            side(
-              label: 'Scor A',
-              value: scoreA,
-              color: SimfTheme.teamRed,
-              onChange: onChangeA,
+      elevation: 0,
+      color: Colors.transparent,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+            colors: [
+              SimfTheme.teamRed.withValues(alpha: 0.14),
+              SimfTheme.surface2.withValues(alpha: 0.5),
+              SimfTheme.teamBlue.withValues(alpha: 0.14),
+            ],
+          ),
+          border: Border(
+            bottom: BorderSide(
+              color: SimfTheme.outline.withValues(alpha: 0.65),
             ),
-            side(
-              label: 'Scor B',
-              value: scoreB,
-              color: SimfTheme.teamBlue,
-              onChange: onChangeB,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.22),
+              blurRadius: 8,
+              offset: const Offset(0, 3),
             ),
           ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Row(
+            children: [
+              side(
+                label: 'Scor A',
+                value: scoreA,
+                color: SimfTheme.teamRed,
+                onChange: onChangeA,
+              ),
+              side(
+                label: 'Scor B',
+                value: scoreB,
+                color: SimfTheme.teamBlue,
+                onChange: onChangeB,
+              ),
+            ],
+          ),
         ),
       ),
     );

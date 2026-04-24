@@ -8,6 +8,7 @@ class Match {
     required this.scoreA,
     required this.scoreB,
     this.durationMinutes = Match.defaultDuration,
+    this.updatedAt,
   });
 
   static const int defaultDuration = 90;
@@ -17,6 +18,7 @@ class Match {
   final int scoreA;
   final int scoreB;
   final int durationMinutes;
+  final DateTime? updatedAt;
 
   Match copyWith({
     String? id,
@@ -24,6 +26,7 @@ class Match {
     int? scoreA,
     int? scoreB,
     int? durationMinutes,
+    DateTime? updatedAt,
   }) {
     return Match(
       id: id ?? this.id,
@@ -31,16 +34,22 @@ class Match {
       scoreA: scoreA ?? this.scoreA,
       scoreB: scoreB ?? this.scoreB,
       durationMinutes: durationMinutes ?? this.durationMinutes,
+      updatedAt: updatedAt ?? this.updatedAt,
     );
   }
 
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'created_at': createdAt.toUtc().toIso8601String(),
-        'score_a': scoreA,
-        'score_b': scoreB,
-        'duration_minutes': durationMinutes,
-      };
+  Map<String, dynamic> toJson() {
+    final m = <String, dynamic>{
+      'id': id,
+      'created_at': createdAt.toUtc().toIso8601String(),
+      'score_a': scoreA,
+      'score_b': scoreB,
+      'duration_minutes': durationMinutes,
+    };
+    final u = updatedAt?.toUtc().toIso8601String();
+    if (u != null) m['updated_at'] = u;
+    return m;
+  }
 
   factory Match.fromJson(Map<String, dynamic> json) {
     return Match(
@@ -50,6 +59,9 @@ class Match {
       scoreB: (json['score_b'] as num).toInt(),
       durationMinutes:
           (json['duration_minutes'] as num?)?.toInt() ?? defaultDuration,
+      updatedAt: (json['updated_at'] as String?) != null
+          ? DateTime.tryParse(json['updated_at'] as String)
+          : null,
     );
   }
 

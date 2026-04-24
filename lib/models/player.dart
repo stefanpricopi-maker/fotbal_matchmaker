@@ -9,6 +9,7 @@ class Player {
     this.sigma = Player.defaultSigma,
     this.isPermanentGk = false,
     this.matchesPlayed = 0,
+    this.updatedAt,
   });
 
   /// Valori implicite din specificație (secțiunea 2.1).
@@ -21,6 +22,7 @@ class Player {
   final double sigma;
   final bool isPermanentGk;
   final int matchesPlayed;
+  final DateTime? updatedAt;
 
   /// Estimare conservatoare uzuală în sisteme μ/σ (μ − 3σ).
   double get conservativeSkill => mu - 3 * sigma;
@@ -32,6 +34,7 @@ class Player {
     double? sigma,
     bool? isPermanentGk,
     int? matchesPlayed,
+    DateTime? updatedAt,
   }) {
     return Player(
       id: id ?? this.id,
@@ -40,6 +43,7 @@ class Player {
       sigma: sigma ?? this.sigma,
       isPermanentGk: isPermanentGk ?? this.isPermanentGk,
       matchesPlayed: matchesPlayed ?? this.matchesPlayed,
+      updatedAt: updatedAt ?? this.updatedAt,
     );
   }
 
@@ -50,6 +54,7 @@ class Player {
         'sigma': sigma,
         'is_permanent_gk': isPermanentGk,
         'matches_played': matchesPlayed,
+        'updated_at': updatedAt?.toUtc().toIso8601String(),
       };
 
   factory Player.fromJson(Map<String, dynamic> json) {
@@ -64,6 +69,11 @@ class Player {
       matchesPlayed: (json['matches_played'] as num?)?.toInt() ??
           (json['matchesPlayed'] as num?)?.toInt() ??
           0,
+      updatedAt: (json['updated_at'] as String?) != null
+          ? DateTime.tryParse(json['updated_at'] as String)
+          : (json['updatedAt'] as String?) != null
+              ? DateTime.tryParse(json['updatedAt'] as String)
+              : null,
     );
   }
 

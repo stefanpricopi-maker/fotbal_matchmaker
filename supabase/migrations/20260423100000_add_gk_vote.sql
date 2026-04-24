@@ -6,3 +6,4 @@ ALTER TABLE public.match_player_stats
 CREATE INDEX IF NOT EXISTS match_player_stats_received_gk_vote_idx
   ON public.match_player_stats (received_gk_vote);
 
+ 
