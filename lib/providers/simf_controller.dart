@@ -19,11 +19,11 @@ class SimfController extends ChangeNotifier {
     required RankingService rankingService,
     required MatchmakingEngine matchmakingEngine,
     Uuid? uuid,
-  })  : _local = localStore,
-        _supabase = supabaseService,
-        _ranking = rankingService,
-        _matchmaking = matchmakingEngine,
-        _uuid = uuid ?? const Uuid();
+  }) : _local = localStore,
+       _supabase = supabaseService,
+       _ranking = rankingService,
+       _matchmaking = matchmakingEngine,
+       _uuid = uuid ?? const Uuid();
 
   final LocalStore _local;
   final SupabaseService _supabase;
@@ -34,19 +34,25 @@ class SimfController extends ChangeNotifier {
   List<Player> _players = [];
   final Set<String> _selectedIds = {};
   MatchmakingResult? _lastMatch;
+  bool _lastMatchIsManual = false;
   String? _lastError;
   bool _loading = false;
-  Map<String, ({
-    int goals,
-    int matches,
-    int mvpCount,
-    int gkOfMatchCount,
-    DateTime? lastMatchAt,
-  })> _aggByPlayerId = const {};
+  Map<
+    String,
+    ({
+      int goals,
+      int matches,
+      int mvpCount,
+      int gkOfMatchCount,
+      DateTime? lastMatchAt,
+    })
+  >
+  _aggByPlayerId = const {};
 
   List<Player> get players => List.unmodifiable(_players);
   Set<String> get selectedIds => Set.unmodifiable(_selectedIds);
   MatchmakingResult? get lastMatch => _lastMatch;
+  bool get lastMatchIsManual => _lastMatchIsManual;
   String? get lastError => _lastError;
   bool get isLoading => _loading;
   int goalsForPlayer(String playerId) => _aggByPlayerId[playerId]?.goals ?? 0;
@@ -118,8 +124,9 @@ class SimfController extends ChangeNotifier {
           final merged = <Player>[
             for (final id in allIds) pickLww(localById[id], remoteById[id]),
           ];
-          merged.sort((a, b) => a.name.compareTo(b.name));
-          await _local.replaceAllPlayers(merged);
+          final deduped = _dedupePlayersByName(merged);
+          deduped.sort((a, b) => a.name.compareTo(b.name));
+          await _local.replaceAllPlayers(deduped);
 
           // Push local-newer snapshots to remote (best-effort).
           for (final id in allIds) {
@@ -138,7 +145,7 @@ class SimfController extends ChangeNotifier {
               }
             }
           }
-          local = merged;
+          local = deduped;
         } on SimfException catch (e) {
           _lastError = e.message;
         } catch (e) {
@@ -179,6 +186,12 @@ class SimfController extends ChangeNotifier {
     final trimmed = name.trim();
     if (trimmed.isEmpty) return null;
 
+    final existing = _findByNormalizedName(trimmed);
+    if (existing != null) {
+      // Nu creăm dubluri: întoarcem jucătorul existent.
+      return existing;
+    }
+
     final p = Player(
       id: _uuid.v4(),
       name: trimmed,
@@ -203,10 +216,41 @@ class SimfController extends ChangeNotifier {
     required Player player,
     required String newName,
   }) async {
-    final trimmed = newName.trim();
-    if (trimmed.isEmpty || trimmed == player.name) return;
+    await updatePlayer(player: player, newName: newName);
+  }
 
-    final updated = player.copyWith(name: trimmed, updatedAt: DateTime.now().toUtc());
+  Future<void> updatePlayer({
+    required Player player,
+    String? newName,
+    bool? isPermanentGk,
+  }) async {
+    final trimmed = (newName ?? player.name).trim();
+    if (trimmed.isEmpty) return;
+
+    final nameChanged = trimmed != player.name;
+    final gkChanged =
+        (isPermanentGk != null) && (isPermanentGk != player.isPermanentGk);
+    if (!nameChanged && !gkChanged) return;
+
+    if (nameChanged) {
+      final targetNorm = _normName(trimmed);
+      final conflict = _players.firstWhere(
+        (p) => p.id != player.id && _normName(p.name) == targetNorm,
+        orElse: () => const Player(id: '', name: ''),
+      );
+      if (conflict.id.isNotEmpty) {
+        _lastError = 'Există deja un jucător cu numele "${conflict.name}".';
+        notifyListeners();
+        return;
+      }
+    }
+
+    final updated = player.copyWith(
+      name: trimmed,
+      isPermanentGk: isPermanentGk ?? player.isPermanentGk,
+      updatedAt: DateTime.now().toUtc(),
+    );
+
     await _local.upsertPlayer(updated);
     if (_supabase.isReady) {
       try {
@@ -215,10 +259,12 @@ class SimfController extends ChangeNotifier {
         _lastError = e.message;
       }
     }
-    _players = _players
-        .map((p) => p.id == updated.id ? updated : p)
-        .toList(growable: false)
-      ..sort((a, b) => a.name.compareTo(b.name));
+
+    _players =
+        _players
+            .map((p) => p.id == updated.id ? updated : p)
+            .toList(growable: false)
+          ..sort((a, b) => a.name.compareTo(b.name));
     notifyListeners();
   }
 
@@ -271,12 +317,70 @@ class SimfController extends ChangeNotifier {
       throw SimfException('Selectează cel puțin 2 jucători pentru meci.');
     }
     _lastMatch = _matchmaking.balanceTeams(chosen);
+    _lastMatchIsManual = false;
+    notifyListeners();
+    return _lastMatch!;
+  }
+
+  /// Setează echipele manual (A/B) din rosterul curent.
+  ///
+  /// Folosit ca “variantă temporară” înainte să ne bazăm pe generator.
+  MatchmakingResult setManualTeams({
+    required Iterable<String> teamAIds,
+    required Iterable<String> teamBIds,
+  }) {
+    final aSet = teamAIds.toSet();
+    final bSet = teamBIds.toSet();
+    if (aSet.isEmpty || bSet.isEmpty) {
+      throw SimfException(
+        'Alege cel puțin 1 jucător în Echipa A și 1 în Echipa B.',
+      );
+    }
+    if (aSet.intersection(bSet).isNotEmpty) {
+      throw SimfException('Un jucător nu poate fi în ambele echipe.');
+    }
+
+    final byId = {for (final p in _players) p.id: p};
+    final teamA = <Player>[
+      for (final id in aSet)
+        if (byId[id] != null) byId[id]!,
+    ];
+    final teamB = <Player>[
+      for (final id in bSet)
+        if (byId[id] != null) byId[id]!,
+    ];
+
+    if (teamA.isEmpty || teamB.isEmpty) {
+      throw SimfException(
+        'Nu am găsit toți jucătorii selectați în rosterul curent.',
+      );
+    }
+
+    // Păstrăm selecția (utilă dacă revii în ecran).
+    _selectedIds
+      ..clear()
+      ..addAll(aSet)
+      ..addAll(bSet);
+
+    final sumA = teamA.fold<double>(0, (s, p) => s + p.mu);
+    final sumB = teamB.fold<double>(0, (s, p) => s + p.mu);
+    final winA = _ranking.winProbabilityTeamA(teamA: teamA, teamB: teamB);
+
+    _lastMatch = MatchmakingResult(
+      teamA: teamA,
+      teamB: teamB,
+      teamSumMuA: sumA,
+      teamSumMuB: sumB,
+      winChanceTeamA: winA,
+    );
+    _lastMatchIsManual = true;
     notifyListeners();
     return _lastMatch!;
   }
 
   void clearMatch() {
     _lastMatch = null;
+    _lastMatchIsManual = false;
     notifyListeners();
   }
 
@@ -300,15 +404,17 @@ class SimfController extends ChangeNotifier {
       scoreB: scoreB,
     );
     final withIds = stats
-        .map((s) => MatchPlayerStats(
-              matchId: m.id,
-              playerId: s.playerId,
-              team: s.team,
-              goals: s.goals,
-              isRotationGk: s.isRotationGk,
-              receivedMvpVote: s.receivedMvpVote,
-              receivedGkVote: s.receivedGkVote,
-            ))
+        .map(
+          (s) => MatchPlayerStats(
+            matchId: m.id,
+            playerId: s.playerId,
+            team: s.team,
+            goals: s.goals,
+            isRotationGk: s.isRotationGk,
+            receivedMvpVote: s.receivedMvpVote,
+            receivedGkVote: s.receivedGkVote,
+          ),
+        )
         .toList(growable: false);
 
     final statsMap = {for (final s in stats) s.playerId: s};
@@ -346,6 +452,167 @@ class SimfController extends ChangeNotifier {
     _aggByPlayerId = await _local.getPlayerAggregates();
     _lastMatch = null;
     _selectedIds.clear();
+    notifyListeners();
+  }
+
+  Future<void> finalizeExistingMatch({
+    required String matchId,
+    required int scoreA,
+    required int scoreB,
+    required List<MatchPlayerStats> stats,
+  }) async {
+    final match = _lastMatch;
+    if (match == null) {
+      throw SimfException('Nu există echipe active pentru acest meci.');
+    }
+    final existing = await _local.getMatchById(matchId);
+    if (existing == null) {
+      throw SimfException('Nu găsesc meciul draft în baza locală.');
+    }
+
+    final now = DateTime.now().toUtc();
+
+    // Persistăm scorul pe match-ul existent (păstrăm createdAt).
+    final m = existing.copyWith(scoreA: scoreA, scoreB: scoreB, updatedAt: now);
+
+    final withIds = stats
+        .map(
+          (s) => MatchPlayerStats(
+            matchId: matchId,
+            playerId: s.playerId,
+            team: s.team,
+            goals: s.goals,
+            isRotationGk: s.isRotationGk,
+            receivedMvpVote: s.receivedMvpVote,
+            receivedGkVote: s.receivedGkVote,
+          ),
+        )
+        .toList(growable: false);
+
+    final statsMap = {for (final s in stats) s.playerId: s};
+    final updated = _ranking.applyMatchToPlayers(
+      roster: _players,
+      scoreA: scoreA,
+      scoreB: scoreB,
+      statsByPlayerId: statsMap,
+      teamA: match.teamA,
+      teamB: match.teamB,
+    );
+
+    final updatedWithTs = updated
+        .map((p) => p.copyWith(updatedAt: now))
+        .toList(growable: false);
+
+    for (final p in updatedWithTs) {
+      await _local.upsertPlayer(p);
+    }
+
+    // Update match + stats local (idempotent).
+    await _local.insertMatchWithStats(match: m, stats: withIds, synced: false);
+
+    if (_supabase.isReady) {
+      try {
+        await _supabase.upsertPlayers(updatedWithTs);
+        await _supabase.upsertMatchWithStats(match: m, stats: withIds);
+        await _local.markMatchSynced(matchId);
+      } on SimfException catch (e) {
+        _lastError = e.message;
+      }
+    }
+
+    _players = updatedWithTs..sort((a, b) => a.name.compareTo(b.name));
+    _aggByPlayerId = await _local.getPlayerAggregates();
+    _lastMatch = null;
+    _lastMatchIsManual = false;
+    _selectedIds.clear();
+    notifyListeners();
+  }
+
+  Future<String> saveDraftMatchFromActiveTeams({
+    int durationMinutes = Match.defaultDuration,
+  }) async {
+    final match = _lastMatch;
+    if (match == null) {
+      throw SimfException('Nu există echipe active.');
+    }
+
+    final now = DateTime.now().toUtc();
+    final matchId = _uuid.v4();
+
+    final draft = Match(
+      id: matchId,
+      createdAt: now,
+      updatedAt: now,
+      scoreA: -1,
+      scoreB: -1,
+      durationMinutes: durationMinutes,
+    );
+
+    final stats = <MatchPlayerStats>[
+      for (final p in match.teamA)
+        MatchPlayerStats(
+          matchId: matchId,
+          playerId: p.id,
+          team: MatchTeam.a,
+          goals: 0,
+          isRotationGk: false,
+          receivedMvpVote: false,
+          receivedGkVote: false,
+        ),
+      for (final p in match.teamB)
+        MatchPlayerStats(
+          matchId: matchId,
+          playerId: p.id,
+          team: MatchTeam.b,
+          goals: 0,
+          isRotationGk: false,
+          receivedMvpVote: false,
+          receivedGkVote: false,
+        ),
+    ];
+
+    await _local.insertMatchWithStats(
+      match: draft,
+      stats: stats,
+      synced: false,
+    );
+    return matchId;
+  }
+
+  Future<void> activateTeamsFromLocalMatch(String matchId) async {
+    final stats = await _local.getStatsForMatch(matchId);
+    if (stats.isEmpty) {
+      throw SimfException('Nu există componență pentru acest meci.');
+    }
+    final byId = {for (final p in _players) p.id: p};
+    final teamAIds = stats
+        .where((s) => s.team == MatchTeam.a)
+        .map((s) => s.playerId);
+    final teamBIds = stats
+        .where((s) => s.team == MatchTeam.b)
+        .map((s) => s.playerId);
+    final teamA = <Player>[
+      for (final id in teamAIds)
+        if (byId[id] != null) byId[id]!,
+    ];
+    final teamB = <Player>[
+      for (final id in teamBIds)
+        if (byId[id] != null) byId[id]!,
+    ];
+    if (teamA.isEmpty || teamB.isEmpty) {
+      throw SimfException('Nu am găsit jucătorii acestui meci în roster.');
+    }
+    final sumA = teamA.fold<double>(0, (s, p) => s + p.mu);
+    final sumB = teamB.fold<double>(0, (s, p) => s + p.mu);
+    final winA = _ranking.winProbabilityTeamA(teamA: teamA, teamB: teamB);
+    _lastMatch = MatchmakingResult(
+      teamA: teamA,
+      teamB: teamB,
+      teamSumMuA: sumA,
+      teamSumMuB: sumB,
+      winChanceTeamA: winA,
+    );
+    _lastMatchIsManual = true;
     notifyListeners();
   }
 
@@ -391,10 +658,7 @@ class SimfController extends ChangeNotifier {
       } else if (localRow.synced) {
         try {
           final localStats = await _local.getStatsForMatch(local.id);
-          await _supabase.upsertMatchWithStats(
-            match: local,
-            stats: localStats,
-          );
+          await _supabase.upsertMatchWithStats(match: local, stats: localStats);
         } on SimfException catch (e) {
           _lastError = e.message;
         } catch (_) {
@@ -404,9 +668,7 @@ class SimfController extends ChangeNotifier {
     }
   }
 
-  Future<void> devSeedDemo({
-    int playersCount = 14,
-  }) async {
+  Future<void> devSeedDemo({int playersCount = 14}) async {
     if (!kDebugMode) return;
 
     _setLoading(true);
@@ -446,7 +708,8 @@ class SimfController extends ChangeNotifier {
         }
       }
 
-      final roster = [..._players, ...created]..sort((a, b) => a.name.compareTo(b.name));
+      final roster = [..._players, ...created]
+        ..sort((a, b) => a.name.compareTo(b.name));
       _players = roster;
 
       final participants = roster
@@ -475,7 +738,9 @@ class SimfController extends ChangeNotifier {
 
       for (var i = 0; i < teams.teamA.length; i++) {
         final p = teams.teamA[i];
-        final g = i == 0 ? 2 : (remainingA > 0 && r.nextDouble() < 0.45 ? 1 : 0);
+        final g = i == 0
+            ? 2
+            : (remainingA > 0 && r.nextDouble() < 0.45 ? 1 : 0);
         final goals = g.clamp(0, remainingA);
         remainingA -= goals;
         stats.add(
@@ -492,7 +757,9 @@ class SimfController extends ChangeNotifier {
       }
       for (var i = 0; i < teams.teamB.length; i++) {
         final p = teams.teamB[i];
-        final g = i == 0 ? 2 : (remainingB > 0 && r.nextDouble() < 0.45 ? 1 : 0);
+        final g = i == 0
+            ? 2
+            : (remainingB > 0 && r.nextDouble() < 0.45 ? 1 : 0);
         final goals = g.clamp(0, remainingB);
         remainingB -= goals;
         stats.add(
@@ -509,13 +776,17 @@ class SimfController extends ChangeNotifier {
       if (remainingA > 0) {
         final idx = stats.indexWhere((s) => s.team == MatchTeam.a);
         if (idx >= 0) {
-          stats[idx] = stats[idx].copyWith(goals: stats[idx].goals + remainingA);
+          stats[idx] = stats[idx].copyWith(
+            goals: stats[idx].goals + remainingA,
+          );
         }
       }
       if (remainingB > 0) {
         final idx = stats.indexWhere((s) => s.team == MatchTeam.b);
         if (idx >= 0) {
-          stats[idx] = stats[idx].copyWith(goals: stats[idx].goals + remainingB);
+          stats[idx] = stats[idx].copyWith(
+            goals: stats[idx].goals + remainingB,
+          );
         }
       }
 
@@ -562,5 +833,160 @@ class SimfController extends ChangeNotifier {
     } finally {
       _setLoading(false);
     }
+  }
+
+  Future<void> devResetAllLocalData() async {
+    if (!kDebugMode) return;
+    _setLoading(true);
+    _lastError = null;
+    try {
+      await _local.clearAllData();
+      _players = const [];
+      _aggByPlayerId = const {};
+      _selectedIds.clear();
+      _lastMatch = null;
+      notifyListeners();
+    } finally {
+      _setLoading(false);
+    }
+  }
+
+  Future<void> devCleanupDuplicatePlayersInCloud() async {
+    if (!kDebugMode) return;
+    if (!_supabase.isReady) {
+      _lastError = 'Cleanup cloud: Supabase nu este configurat.';
+      notifyListeners();
+      return;
+    }
+    _setLoading(true);
+    _lastError = null;
+    try {
+      final remotePlayers = await _supabase.fetchPlayers();
+      final remoteStats = await _supabase.fetchAllMatchPlayerStats();
+
+      // Group by normalized name.
+      final groups = <String, List<Player>>{};
+      for (final p in remotePlayers) {
+        final key = _normName(p.name);
+        (groups[key] ??= <Player>[]).add(p);
+      }
+
+      // Index stats by player and detect match conflicts for reassignment.
+      final matchIdsByPlayer = <String, Set<String>>{};
+      for (final s in remoteStats) {
+        matchIdsByPlayer
+            .putIfAbsent(s.playerId, () => <String>{})
+            .add(s.matchId);
+      }
+
+      var deleted = 0;
+      var reassigned = 0;
+      var skipped = 0;
+
+      for (final entry in groups.entries) {
+        final list = entry.value;
+        if (list.length <= 1) continue;
+
+        list.sort((a, b) {
+          final ta = a.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          final tb = b.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          return tb.compareTo(ta); // newest first
+        });
+        final winner = list.first;
+        final losers = list.skip(1).toList(growable: false);
+
+        final winnerMatches = matchIdsByPlayer[winner.id] ?? <String>{};
+
+        for (final loser in losers) {
+          final loserMatches = matchIdsByPlayer[loser.id] ?? <String>{};
+          // Dacă winner și loser apar în același meci, reasignarea ar crea conflict PK.
+          if (winnerMatches.intersection(loserMatches).isNotEmpty) {
+            skipped++;
+            continue;
+          }
+
+          if (loserMatches.isNotEmpty) {
+            await _supabase.reassignMatchPlayerStatsPlayerId(
+              fromPlayerId: loser.id,
+              toPlayerId: winner.id,
+            );
+            reassigned++;
+            winnerMatches.addAll(loserMatches);
+          }
+
+          await _supabase.deletePlayer(loser.id);
+          deleted++;
+        }
+      }
+
+      await loadPlayers();
+      _lastError = null;
+      DebugLog.write(
+        runId: 'pre-fix',
+        hypothesisId: 'H-CLEANUP',
+        location: 'simf_controller.dart:devCleanupDuplicatePlayersInCloud',
+        message: 'cloud duplicate cleanup done',
+        data: {
+          'deleted': deleted,
+          'reassigned': reassigned,
+          'skipped': skipped,
+        },
+      );
+    } on SimfException catch (e) {
+      _lastError = e.message;
+    } catch (e) {
+      _lastError = 'Cleanup cloud eșuat: $e';
+    } finally {
+      _setLoading(false);
+    }
+  }
+
+  String _stripDiacritics(String s) {
+    return s
+        .replaceAll('ă', 'a')
+        .replaceAll('â', 'a')
+        .replaceAll('î', 'i')
+        .replaceAll('ș', 's')
+        .replaceAll('ş', 's')
+        .replaceAll('ț', 't')
+        .replaceAll('ţ', 't')
+        .replaceAll('Ă', 'A')
+        .replaceAll('Â', 'A')
+        .replaceAll('Î', 'I')
+        .replaceAll('Ș', 'S')
+        .replaceAll('Ş', 'S')
+        .replaceAll('Ț', 'T')
+        .replaceAll('Ţ', 'T');
+  }
+
+  String _normName(String s) {
+    final cleaned = s.trim().replaceAll(RegExp(r'\s+'), ' ');
+    return _stripDiacritics(cleaned).toLowerCase();
+  }
+
+  Player? _findByNormalizedName(String name) {
+    final key = _normName(name);
+    for (final p in _players) {
+      if (_normName(p.name) == key) return p;
+    }
+    return null;
+  }
+
+  List<Player> _dedupePlayersByName(List<Player> players) {
+    // Unicitate pe nume normalizat: păstrăm varianta cu updated_at mai nou;
+    // la egalitate păstrăm prima (stabil).
+    final byKey = <String, Player>{};
+    for (final p in players) {
+      final key = _normName(p.name);
+      final cur = byKey[key];
+      if (cur == null) {
+        byKey[key] = p;
+        continue;
+      }
+      final tc = cur.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final tp = p.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      if (tp.isAfter(tc)) byKey[key] = p;
+    }
+    return byKey.values.toList(growable: false);
   }
 }

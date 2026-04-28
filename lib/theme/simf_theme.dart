@@ -200,4 +200,33 @@ abstract final class SimfTheme {
       ),
     );
   }
+
+  /// Înălțime comună pentru butoane acțiune pe lățime completă (setup meci, etc.).
+  static const double wideActionButtonHeight = 50;
+
+  static final BorderRadius _wideActionButtonRadius = BorderRadius.circular(14);
+
+  /// [FilledButton] full-lățime: aceeași înălțime și colțuri ca la tema globală.
+  static ButtonStyle wideFilledButton(BuildContext context) {
+    final t = FilledButtonTheme.of(context).style;
+    return (t ?? const ButtonStyle()).merge(
+      FilledButton.styleFrom(
+        minimumSize: const Size(double.infinity, wideActionButtonHeight),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        shape: RoundedRectangleBorder(borderRadius: _wideActionButtonRadius),
+      ),
+    );
+  }
+
+  /// [OutlinedButton] full-lățime: aliniat vizual cu [wideFilledButton].
+  static ButtonStyle wideOutlinedButton(BuildContext context) {
+    final t = OutlinedButtonTheme.of(context).style;
+    return (t ?? const ButtonStyle()).merge(
+      OutlinedButton.styleFrom(
+        minimumSize: const Size(double.infinity, wideActionButtonHeight),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        shape: RoundedRectangleBorder(borderRadius: _wideActionButtonRadius),
+      ),
+    );
+  }
 }

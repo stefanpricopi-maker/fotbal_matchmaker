@@ -86,3 +86,23 @@ CREATE POLICY "match_player_stats_allow_all_anon_auth"
   TO anon, authenticated
   USING (true)
   WITH CHECK (true);
+
+-- ---------------------------------------------------------------------------
+-- Grants (required in addition to RLS policies)
+-- ---------------------------------------------------------------------------
+
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON TABLE public.players, public.matches, public.match_player_stats
+TO anon, authenticated;
+
+-- Ensure future tables/functions in `public` stay accessible in dev mode.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO anon, authenticated;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+GRANT USAGE, SELECT ON SEQUENCES TO anon, authenticated;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+GRANT EXECUTE ON FUNCTIONS TO anon, authenticated;

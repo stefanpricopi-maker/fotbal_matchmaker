@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/models.dart';
 import '../providers/simf_controller.dart';
 import '../theme/simf_theme.dart';
+import 'match_entry_screen.dart';
 
 class MatchHistoryScreen extends StatefulWidget {
   const MatchHistoryScreen({super.key});
@@ -19,15 +20,15 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     _future ??= context.read<SimfController>().localStore.getRecentMatches(
-          limit: 100,
-        );
+      limit: 100,
+    );
   }
 
   Future<void> _refresh() async {
     setState(() {
       _future = context.read<SimfController>().localStore.getRecentMatches(
-            limit: 100,
-          );
+        limit: 100,
+      );
     });
     await _future;
   }
@@ -95,7 +96,7 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
                   title: Row(
                     children: [
                       Text(
-                        '${m.scoreA} - ${m.scoreB}',
+                        m.scoreLabel,
                         style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
                       const SizedBox(width: 10),
@@ -116,12 +117,14 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
                           ),
                         ),
                         child: Text(
-                          synced ? 'Synced' : 'Offline',
+                          m.isDraft ? 'Draft' : (synced ? 'Synced' : 'Offline'),
                           style: TextStyle(
                             fontSize: 12,
-                            color: synced
-                                ? SimfTheme.pitchGreenLight
-                                : Colors.orange,
+                            color: m.isDraft
+                                ? Colors.white70
+                                : (synced
+                                      ? SimfTheme.pitchGreenLight
+                                      : Colors.orange),
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -162,7 +165,34 @@ class MatchHistoryDetailScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Meci ${match.scoreA}-${match.scoreB}'),
+        title: Text(
+          match.isDraft ? 'Meci draft' : 'Meci ${match.scoreA}-${match.scoreB}',
+        ),
+        actions: [
+          if (match.isDraft)
+            IconButton(
+              tooltip: 'Adaugă scor',
+              onPressed: () async {
+                final ctrl = context.read<SimfController>();
+                try {
+                  await ctrl.activateTeamsFromLocalMatch(match.id);
+                  if (!context.mounted) return;
+                  await Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          MatchEntryScreen(existingMatchId: match.id),
+                    ),
+                  );
+                } catch (e) {
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Nu pot deschide draft-ul: $e')),
+                  );
+                }
+              },
+              icon: const Icon(Icons.edit_note),
+            ),
+        ],
       ),
       body: FutureBuilder<List<MatchPlayerStats>>(
         future: store.getStatsForMatch(match.id),
@@ -172,7 +202,9 @@ class MatchHistoryDetailScreen extends StatelessWidget {
           }
           final stats = snap.data ?? const [];
           if (stats.isEmpty) {
-            return const Center(child: Text('Nu există statistici pentru acest meci.'));
+            return const Center(
+              child: Text('Nu există statistici pentru acest meci.'),
+            );
           }
 
           final a = stats.where((s) => s.team == MatchTeam.a).toList();
@@ -277,4 +309,3 @@ class MatchHistoryDetailScreen extends StatelessWidget {
     );
   }
 }
-

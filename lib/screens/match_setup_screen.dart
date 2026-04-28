@@ -23,6 +23,8 @@ class _MatchSetupScreenState extends State<MatchSetupScreen> {
   final TextEditingController _pasteCtrl = TextEditingController();
   bool _importBusy = false;
   bool _autoCreateMissing = true;
+  bool _manualMode = false;
+  final Map<String, MatchTeam> _manualTeams = {};
 
   @override
   void dispose() {
@@ -257,11 +259,12 @@ class _MatchSetupScreenState extends State<MatchSetupScreen> {
     required String suggestedName,
     required bool suggestedPermanentGk,
   }) async {
-    final scored = allPlayers
-        .map((p) => (p: p, score: _similarityScore(typedName, p.name)))
-        .where((e) => e.score > 0.25)
-        .toList(growable: false)
-      ..sort((a, b) => b.score.compareTo(a.score));
+    final scored =
+        allPlayers
+            .map((p) => (p: p, score: _similarityScore(typedName, p.name)))
+            .where((e) => e.score > 0.25)
+            .toList(growable: false)
+          ..sort((a, b) => b.score.compareTo(a.score));
 
     var query = '';
     Player? picked;
@@ -276,11 +279,12 @@ class _MatchSetupScreenState extends State<MatchSetupScreen> {
               return scored.take(10).map((e) => (e.p, e.score)).toList();
             }
             final qn = _norm(query);
-            final list = allPlayers
-                .map((p) => (p, _similarityScore(qn, p.name)))
-                .where((e) => e.$2 > 0.15)
-                .toList()
-              ..sort((a, b) => b.$2.compareTo(a.$2));
+            final list =
+                allPlayers
+                    .map((p) => (p, _similarityScore(qn, p.name)))
+                    .where((e) => e.$2 > 0.15)
+                    .toList()
+                  ..sort((a, b) => b.$2.compareTo(a.$2));
             return list.take(20).toList();
           }
 
@@ -360,7 +364,9 @@ class _MatchSetupScreenState extends State<MatchSetupScreen> {
                 child: const Text('Sari peste'),
               ),
               FilledButton(
-                onPressed: picked == null ? null : () => Navigator.pop(ctx, picked),
+                onPressed: picked == null
+                    ? null
+                    : () => Navigator.pop(ctx, picked),
                 child: const Text('Alege'),
               ),
             ],
@@ -514,10 +520,99 @@ class _MatchSetupScreenState extends State<MatchSetupScreen> {
     }
   }
 
+  /// Bandă compactă: context + câți jucători sunt deja în selecție.
+  Widget _introStrip(SimfController ctrl) {
+    final theme = Theme.of(context);
+    final n = ctrl.selectedIds.length;
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  SimfTheme.pitchGreenLight.withValues(alpha: 0.38),
+                  SimfTheme.teamBlue.withValues(alpha: 0.14),
+                ],
+              ),
+              border: Border(
+                bottom: BorderSide(
+                  color: SimfTheme.outline.withValues(alpha: 0.55),
+                ),
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.groups_2_outlined,
+                    size: 30,
+                    color: Colors.white.withValues(alpha: 0.92),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Pregătire meci',
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.2,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Lipește lista din WhatsApp, importă în selecție, apoi generează echipe.',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: Colors.white.withValues(alpha: 0.72),
+                            height: 1.35,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: SimfTheme.surface.withValues(alpha: 0.55),
+                      borderRadius: BorderRadius.circular(22),
+                      border: Border.all(
+                        color: SimfTheme.outline.withValues(alpha: 0.75),
+                      ),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      child: Text(
+                        '$n selectați',
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _autoCreateTile(BuildContext context) {
-    final subtitleStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
-          color: Colors.white60,
-        );
+    final subtitleStyle = Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(color: Colors.white60);
     return SwitchListTile.adaptive(
       contentPadding: const EdgeInsets.symmetric(horizontal: 4),
       value: _autoCreateMissing,
@@ -540,45 +635,65 @@ class _MatchSetupScreenState extends State<MatchSetupScreen> {
     final theme = Theme.of(context);
     return Card(
       clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(
-                  Icons.forum_outlined,
-                  size: 22,
-                  color: SimfTheme.pitchGreenLight.withValues(alpha: 0.95),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  SimfTheme.teamBlue.withValues(alpha: 0.32),
+                  SimfTheme.pitchGreen.withValues(alpha: 0.1),
+                ],
+              ),
+              border: Border(
+                bottom: BorderSide(
+                  color: SimfTheme.outline.withValues(alpha: 0.55),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Mesajul de pe grup',
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Lipește lista: câte un nume pe rând. Pentru portar poți folosi „(portar)” sau GK în text.',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: Colors.white70,
-                          height: 1.35,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+              ),
             ),
-            const SizedBox(height: 14),
-            Expanded(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.forum_outlined,
+                    size: 24,
+                    color: Colors.white.withValues(alpha: 0.9),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Mesajul de pe grup',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.2,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Câte un nume pe rând. Pentru portar: „(portar)” sau GK în text.',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: Colors.white.withValues(alpha: 0.72),
+                            height: 1.35,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
               child: TextField(
                 controller: _pasteCtrl,
                 maxLines: null,
@@ -587,39 +702,53 @@ class _MatchSetupScreenState extends State<MatchSetupScreen> {
                 textCapitalization: TextCapitalization.words,
                 decoration: const InputDecoration(
                   alignLabelWithHint: true,
-                  hintText:
-                      'Dan Nicoară\nJoshua\nAlex (portar)\n…',
+                  hintText: 'Dan Nicoară\nJoshua\nAlex (portar)\n…',
                 ),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  void _generateTeams(SimfController ctrl) {
+  Future<void> _generateTeams(SimfController ctrl) async {
     try {
-      ctrl.generateTeams();
+      String? draftId;
+      if (_manualMode) {
+        final aIds = _manualTeams.entries
+            .where((e) => e.value == MatchTeam.a)
+            .map((e) => e.key);
+        final bIds = _manualTeams.entries
+            .where((e) => e.value == MatchTeam.b)
+            .map((e) => e.key);
+        ctrl.setManualTeams(teamAIds: aIds, teamBIds: bIds);
+        draftId = await ctrl.saveDraftMatchFromActiveTeams();
+      } else {
+        ctrl.generateTeams();
+      }
+      if (!mounted) return;
       Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) => const MatchPreviewScreen(),
+          builder: (_) => MatchPreviewScreen(draftMatchId: draftId),
         ),
       );
     } on SimfException catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message)),
-      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     }
   }
 
-  Widget _importButton() {
+  Widget _importButton(BuildContext context) {
     return FilledButton.icon(
+      style: SimfTheme.wideFilledButton(context),
       onPressed: _importBusy ? null : _importFromWhatsApp,
       icon: _importBusy
           ? const SizedBox(
-              width: 18,
-              height: 18,
+              width: 20,
+              height: 20,
               child: CircularProgressIndicator(strokeWidth: 2),
             )
           : const Icon(Icons.playlist_add_check_rounded),
@@ -627,26 +756,247 @@ class _MatchSetupScreenState extends State<MatchSetupScreen> {
     );
   }
 
-  Widget _generateButton(SimfController ctrl) {
+  Widget _generateButton(BuildContext context, SimfController ctrl) {
     final n = ctrl.selectedIds.length;
-    final ready = n >= 2;
+    final aCnt = _manualTeams.values.where((t) => t == MatchTeam.a).length;
+    final bCnt = _manualTeams.values.where((t) => t == MatchTeam.b).length;
+    final ready = _manualMode ? (aCnt > 0 && bCnt > 0) : (n >= 2);
     return FilledButton.icon(
-      style: FilledButton.styleFrom(
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        backgroundColor: ready ? null : SimfTheme.surface2,
-        foregroundColor: ready ? null : Colors.white54,
-      ),
-      onPressed: !ready ? null : () => _generateTeams(ctrl),
+      style: SimfTheme.wideFilledButton(context),
+      onPressed: !ready ? null : () async => _generateTeams(ctrl),
       icon: const Icon(Icons.shuffle_rounded),
-      label: Text(ready ? 'Generare echipe ($n)' : 'Generare echipe (min. 2)'),
+      label: Text(
+        _manualMode
+            ? (ready
+                  ? 'Continuă cu echipe manuale (A $aCnt / B $bCnt)'
+                  : 'Alege echipe manuale (min. 1 / 1)')
+            : (ready ? 'Generare echipe ($n)' : 'Generare echipe (min. 2)'),
+      ),
     );
   }
 
-  Widget _clearButton() {
+  Future<void> _openManualTeamsDialog(SimfController ctrl) async {
+    final all = [...ctrl.players]..sort((a, b) => a.name.compareTo(b.name));
+    final map = Map<String, MatchTeam>.from(_manualTeams);
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) {
+          int cnt(MatchTeam t) => map.values.where((e) => e == t).length;
+          final aCnt = cnt(MatchTeam.a);
+          final bCnt = cnt(MatchTeam.b);
+
+          Widget chip({
+            required String label,
+            required bool selected,
+            required VoidCallback onTap,
+            required Color color,
+          }) {
+            return InkWell(
+              onTap: onTap,
+              borderRadius: BorderRadius.circular(999),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 120),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: selected
+                      ? color.withValues(alpha: 0.22)
+                      : Colors.white.withValues(alpha: 0.06),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: selected
+                        ? color.withValues(alpha: 0.85)
+                        : Colors.white24,
+                  ),
+                ),
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: selected ? color : Colors.white70,
+                  ),
+                ),
+              ),
+            );
+          }
+
+          return AlertDialog(
+            title: const Text('Alege echipele manual'),
+            content: SizedBox(
+              width: 680,
+              height: 520,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 8,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.18),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(color: Colors.white24),
+                        ),
+                        child: Text('A: $aCnt  •  B: $bCnt'),
+                      ),
+                      TextButton.icon(
+                        onPressed: () => setLocal(map.clear),
+                        icon: const Icon(Icons.clear_all),
+                        label: const Text('Golește'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  if (all.isEmpty)
+                    Expanded(
+                      child: Center(
+                        child: Text(
+                          'Nu ai niciun jucător disponibil.\n\n'
+                          'Ieși din dialog și adaugă jucători din „SIMF — Jucători”\n'
+                          'sau importă din WhatsApp, apoi revino aici.',
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(color: Colors.white70, height: 1.35),
+                        ),
+                      ),
+                    )
+                  else
+                    Expanded(
+                      child: ListView.separated(
+                        itemCount: all.length,
+                        separatorBuilder: (_, __) => Divider(
+                          height: 1,
+                          color: SimfTheme.outline.withValues(alpha: 0.35),
+                        ),
+                        itemBuilder: (context, i) {
+                          final p = all[i];
+                          final t = map[p.id];
+                          return ListTile(
+                            dense: true,
+                            title: Text(p.name),
+                            subtitle: p.isPermanentGk
+                                ? const Text('Portar permanent')
+                                : null,
+                            trailing: Wrap(
+                              spacing: 8,
+                              children: [
+                                chip(
+                                  label: 'A',
+                                  selected: t == MatchTeam.a,
+                                  color: SimfTheme.teamRed,
+                                  onTap: () => setLocal(() {
+                                    if (t == MatchTeam.a) {
+                                      map.remove(p.id);
+                                    } else {
+                                      map[p.id] = MatchTeam.a;
+                                    }
+                                  }),
+                                ),
+                                chip(
+                                  label: 'B',
+                                  selected: t == MatchTeam.b,
+                                  color: SimfTheme.teamBlue,
+                                  onTap: () => setLocal(() {
+                                    if (t == MatchTeam.b) {
+                                      map.remove(p.id);
+                                    } else {
+                                      map[p.id] = MatchTeam.b;
+                                    }
+                                  }),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Închide'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  setState(() {
+                    _manualTeams
+                      ..clear()
+                      ..addAll(map);
+                  });
+                  Navigator.pop(ctx);
+                },
+                child: const Text('Salvează'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _manualTeamsCard(BuildContext context, SimfController ctrl) {
+    final aCnt = _manualTeams.values.where((t) => t == MatchTeam.a).length;
+    final bCnt = _manualTeams.values.where((t) => t == MatchTeam.b).length;
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SwitchListTile.adaptive(
+              contentPadding: EdgeInsets.zero,
+              value: _manualMode,
+              onChanged: (v) => setState(() => _manualMode = v),
+              secondary: Icon(
+                Icons.rule_folder_outlined,
+                color: SimfTheme.pitchGreenLight.withValues(alpha: 0.95),
+              ),
+              title: const Text('Aleg echipele manual (A/B)'),
+              subtitle: Text(
+                'Temporar: alegi tu componența echipelor, apoi introduci scorul.',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: Colors.white60),
+              ),
+            ),
+            if (_manualMode) ...[
+              const SizedBox(height: 8),
+              FilledButton.icon(
+                style: SimfTheme.wideFilledButton(context),
+                onPressed: () => _openManualTeamsDialog(ctrl),
+                icon: const Icon(Icons.groups_2_outlined),
+                label: Text('Alege jucători (A $aCnt / B $bCnt)'),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Tip: dacă ai importat din WhatsApp, poți alege doar din acei jucători (sau din tot rosterul).',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: Colors.white54),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _clearButton(BuildContext context) {
     return OutlinedButton.icon(
-      onPressed: _importBusy
-          ? null
-          : () => setState(() => _pasteCtrl.clear()),
+      style: SimfTheme.wideOutlinedButton(context),
+      onPressed: _importBusy ? null : () => setState(() => _pasteCtrl.clear()),
       icon: const Icon(Icons.backspace_outlined, size: 20),
       label: const Text('Golește câmpul'),
     );
@@ -668,50 +1018,80 @@ class _MatchSetupScreenState extends State<MatchSetupScreen> {
     SimfController ctrl, {
     bool fillVertical = false,
   }) {
+    final theme = Theme.of(context);
     return Card(
       clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: fillVertical ? MainAxisSize.max : MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(left: 4, right: 4, top: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: fillVertical ? MainAxisSize.max : MainAxisSize.min,
+        children: [
+          DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  SimfTheme.amber.withValues(alpha: 0.22),
+                  SimfTheme.pitchGreen.withValues(alpha: 0.08),
+                ],
+              ),
+              border: Border(
+                bottom: BorderSide(
+                  color: SimfTheme.outline.withValues(alpha: 0.55),
+                ),
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
               child: Row(
                 children: [
                   Icon(
                     Icons.touch_app_outlined,
-                    size: 20,
-                    color: SimfTheme.amber.withValues(alpha: 0.85),
+                    size: 24,
+                    color: Colors.white.withValues(alpha: 0.9),
                   ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Pași',
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Acțiuni',
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 6),
-            _importButton(),
-            const SizedBox(height: 10),
-            _generateButton(ctrl),
-            const SizedBox(height: 8),
-            _clearButton(),
-            const SizedBox(height: 10),
-            Divider(height: 1, color: SimfTheme.outline.withValues(alpha: 0.65)),
-            _autoCreateTile(context),
-            const SizedBox(height: 4),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              child: _selectionHint(ctrl),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _importButton(context),
+                const SizedBox(height: 10),
+                _generateButton(context, ctrl),
+                const SizedBox(height: 10),
+                _clearButton(context),
+                const SizedBox(height: 12),
+                Divider(
+                  height: 1,
+                  color: SimfTheme.outline.withValues(alpha: 0.65),
+                ),
+                const SizedBox(height: 4),
+                _autoCreateTile(context),
+                const SizedBox(height: 8),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: _selectionHint(ctrl),
+                ),
+              ],
             ),
-            if (fillVertical) const Spacer(),
-          ],
-        ),
+          ),
+          if (fillVertical) const Spacer(),
+        ],
       ),
     );
   }
@@ -721,9 +1101,7 @@ class _MatchSetupScreenState extends State<MatchSetupScreen> {
     final ctrl = context.watch<SimfController>();
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Adaugă listă jucători pentru joc'),
-      ),
+      appBar: AppBar(title: const Text('Adaugă listă jucători pentru joc')),
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
@@ -745,17 +1123,36 @@ class _MatchSetupScreenState extends State<MatchSetupScreen> {
               if (wide) {
                 return Padding(
                   padding: outer,
-                  child: Row(
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      _introStrip(ctrl),
+                      const SizedBox(height: 12),
                       Expanded(
-                        flex: 58,
-                        child: _pasteEditorCard(context),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        flex: 34,
-                        child: _actionsPanel(context, ctrl, fillVertical: true),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Expanded(
+                              flex: 58,
+                              child: _pasteEditorCard(context),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              flex: 34,
+                              child: ListView(
+                                children: [
+                                  _actionsPanel(
+                                    context,
+                                    ctrl,
+                                    fillVertical: false,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  _manualTeamsCard(context, ctrl),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -764,13 +1161,27 @@ class _MatchSetupScreenState extends State<MatchSetupScreen> {
 
               return Padding(
                 padding: outer,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Expanded(child: _pasteEditorCard(context)),
-                    const SizedBox(height: 14),
-                    _actionsPanel(context, ctrl, fillVertical: false),
-                  ],
+                child: Builder(
+                  builder: (context) {
+                    // Pe ecrane joase, `Column` poate overflow-ui. Folosim scroll + înălțime
+                    // explicită pentru editor, ca să păstrăm UI-ul utilizabil.
+                    final h = constraints.maxHeight;
+                    final pasteH = (h * 0.38).clamp(220.0, 420.0);
+                    return ListView(
+                      children: [
+                        _introStrip(ctrl),
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          height: pasteH,
+                          child: _pasteEditorCard(context),
+                        ),
+                        const SizedBox(height: 14),
+                        _actionsPanel(context, ctrl, fillVertical: false),
+                        const SizedBox(height: 12),
+                        _manualTeamsCard(context, ctrl),
+                      ],
+                    );
+                  },
                 ),
               );
             },

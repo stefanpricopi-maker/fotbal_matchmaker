@@ -18,8 +18,10 @@ class PlayerListScreen extends StatefulWidget {
 }
 
 enum _PlayerSort { name, skill, lastMatch, goals }
+
 enum _PlayerRowAction { rename, delete }
-enum _TopAction { devSeed, devClearSeed }
+
+enum _TopAction { devSeed, devClearSeed, devResetLocal, devCleanupCloudDupes }
 
 class _PlayerListScreenState extends State<PlayerListScreen> {
   final TextEditingController _searchCtrl = TextEditingController();
@@ -118,8 +120,7 @@ class _PlayerListScreenState extends State<PlayerListScreen> {
                   const SizedBox(height: 12),
                   CheckboxListTile(
                     value: permanentGk,
-                    onChanged: (v) =>
-                        setLocal(() => permanentGk = v ?? false),
+                    onChanged: (v) => setLocal(() => permanentGk = v ?? false),
                     title: const Text('Portar permanent'),
                     controlAffinity: ListTileControlAffinity.leading,
                   ),
@@ -143,9 +144,9 @@ class _PlayerListScreenState extends State<PlayerListScreen> {
 
     if (ok == true && mounted) {
       await context.read<SimfController>().addPlayer(
-            name: nameCtrl.text,
-            isPermanentGk: permanentGk,
-          );
+        name: nameCtrl.text,
+        isPermanentGk: permanentGk,
+      );
     }
     nameCtrl.dispose();
   }
@@ -171,6 +172,7 @@ class _PlayerListScreenState extends State<PlayerListScreen> {
               ),
       };
     }
+
     final players = [...filtered]..sort(cmp);
 
     return Scaffold(
@@ -181,7 +183,9 @@ class _PlayerListScreenState extends State<PlayerListScreen> {
               child: Text('SIMF — Jucători', overflow: TextOverflow.ellipsis),
             ),
             Icon(
-              ctrl.hasCloudSync ? Icons.cloud_done_outlined : Icons.cloud_off_outlined,
+              ctrl.hasCloudSync
+                  ? Icons.cloud_done_outlined
+                  : Icons.cloud_off_outlined,
               size: 22,
               color: ctrl.hasCloudSync
                   ? SimfTheme.pitchGreenLight
@@ -214,6 +218,82 @@ class _PlayerListScreenState extends State<PlayerListScreen> {
                       margin: EdgeInsets.fromLTRB(12, 0, 12, 24),
                     ),
                   );
+                } else if (v == _TopAction.devResetLocal) {
+                  final sure = await showDialog<bool>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('Reset local (SQLite)?'),
+                      content: const Text(
+                        'Se șterg TOATE datele locale: jucători, meciuri și statistici.\n\n'
+                        'Cloud (Supabase) nu este afectat.',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: const Text('Renunță'),
+                        ),
+                        FilledButton(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          child: const Text('Șterge tot local'),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (sure != true || !context.mounted) return;
+                  await context.read<SimfController>().devResetAllLocalData();
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Local reset: baza SQLite a fost golită.'),
+                      behavior: SnackBarBehavior.floating,
+                      margin: EdgeInsets.fromLTRB(12, 0, 12, 24),
+                    ),
+                  );
+                }
+                if (v == _TopAction.devCleanupCloudDupes && context.mounted) {
+                  if (!ctrl.hasCloudSync) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Cleanup cloud: Supabase nu este activ.'),
+                        behavior: SnackBarBehavior.floating,
+                        margin: EdgeInsets.fromLTRB(12, 0, 12, 24),
+                      ),
+                    );
+                    return;
+                  }
+                  final sure = await showDialog<bool>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('Cleanup dubluri în cloud?'),
+                      content: const Text(
+                        'Va păstra un singur jucător per nume (ignorând diacritice/spații),\n'
+                        'va muta statisticile către “winner” când e sigur și va șterge duplicatele.\n\n'
+                        'Dacă doi dubluri apar în același meci, acel caz va fi sărit.',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: const Text('Renunță'),
+                        ),
+                        FilledButton(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          child: const Text('Rulează cleanup'),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (sure != true || !context.mounted) return;
+                  await context
+                      .read<SimfController>()
+                      .devCleanupDuplicatePlayersInCloud();
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Cleanup cloud finalizat.'),
+                      behavior: SnackBarBehavior.floating,
+                      margin: EdgeInsets.fromLTRB(12, 0, 12, 24),
+                    ),
+                  );
                 }
               },
               itemBuilder: (context) => const [
@@ -225,6 +305,15 @@ class _PlayerListScreenState extends State<PlayerListScreen> {
                   value: _TopAction.devClearSeed,
                   child: Text('Șterge demo seed'),
                 ),
+                PopupMenuDivider(),
+                PopupMenuItem(
+                  value: _TopAction.devResetLocal,
+                  child: Text('Reset local (șterge tot)'),
+                ),
+                PopupMenuItem(
+                  value: _TopAction.devCleanupCloudDupes,
+                  child: Text('Cleanup dubluri (cloud)'),
+                ),
               ],
               icon: const Icon(Icons.developer_mode),
             ),
@@ -235,7 +324,10 @@ class _PlayerListScreenState extends State<PlayerListScreen> {
             itemBuilder: (context) => const [
               PopupMenuItem(value: _PlayerSort.name, child: Text('Nume')),
               PopupMenuItem(value: _PlayerSort.skill, child: Text('Skill')),
-              PopupMenuItem(value: _PlayerSort.lastMatch, child: Text('Ultimul meci')),
+              PopupMenuItem(
+                value: _PlayerSort.lastMatch,
+                child: Text('Ultimul meci'),
+              ),
               PopupMenuItem(value: _PlayerSort.goals, child: Text('Goluri')),
             ],
             icon: const Icon(Icons.sort),
@@ -315,8 +407,10 @@ class _PlayerListScreenState extends State<PlayerListScreen> {
 
                 final p = players[index - 1];
                 return Card(
-                  margin:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  margin: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
                   child: ListTile(
                     leading: Tooltip(
                       message: p.isPermanentGk
@@ -364,7 +458,9 @@ class _PlayerListScreenState extends State<PlayerListScreen> {
                               child: Container(
                                 padding: const EdgeInsets.all(3),
                                 decoration: BoxDecoration(
-                                  color: SimfTheme.amber.withValues(alpha: 0.95),
+                                  color: SimfTheme.amber.withValues(
+                                    alpha: 0.95,
+                                  ),
                                   shape: BoxShape.circle,
                                   border: Border.all(
                                     color: SimfTheme.surface,
@@ -390,202 +486,239 @@ class _PlayerListScreenState extends State<PlayerListScreen> {
                       );
                     },
                     subtitle: Wrap(
-                spacing: 10,
-                runSpacing: 4,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  Tooltip(
-                    message:
-                        'μ (mu) = estimarea abilității curente (media distribuției). Mai mare = jucător mai bun.',
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
+                      spacing: 10,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        Icon(
-                          Icons.show_chart,
-                          size: 16,
-                          color: SimfTheme.pitchGreenLight,
+                        Tooltip(
+                          message:
+                              'μ (mu) = estimarea abilității curente (media distribuției). Mai mare = jucător mai bun.',
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.show_chart,
+                                size: 16,
+                                color: SimfTheme.pitchGreenLight,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(p.mu.toStringAsFixed(2)),
+                            ],
+                          ),
                         ),
-                        const SizedBox(width: 4),
-                        Text(p.mu.toStringAsFixed(2)),
-                      ],
-                    ),
-                  ),
-                  Tooltip(
-                    message:
-                        'σ (sigma) = incertitudinea ratingului. Mai mic = suntem mai siguri de valoare; mai mare = rating încă „neformatat”.',
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.waves,
-                          size: 16,
-                          color: Colors.white60,
+                        Tooltip(
+                          message:
+                              'σ (sigma) = incertitudinea ratingului. Mai mic = suntem mai siguri de valoare; mai mare = rating încă „neformatat”.',
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.waves,
+                                size: 16,
+                                color: Colors.white60,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(p.sigma.toStringAsFixed(2)),
+                            ],
+                          ),
                         ),
-                        const SizedBox(width: 4),
-                        Text(p.sigma.toStringAsFixed(2)),
-                      ],
-                    ),
-                  ),
-                  Tooltip(
-                    message: 'Skill conservator (μ − 3σ). Folosit pentru echilibrări.',
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.stars_outlined,
-                          size: 16,
-                          color: SimfTheme.amber,
+                        Tooltip(
+                          message:
+                              'Skill conservator (μ − 3σ). Folosit pentru echilibrări.',
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.stars_outlined,
+                                size: 16,
+                                color: SimfTheme.amber,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(p.conservativeSkill.toStringAsFixed(1)),
+                            ],
+                          ),
                         ),
-                        const SizedBox(width: 4),
-                        Text(p.conservativeSkill.toStringAsFixed(1)),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.sports_soccer,
+                              size: 16,
+                              color: Colors.white60,
+                            ),
+                            const SizedBox(width: 4),
+                            Text('meciuri: ${p.matchesPlayed}'),
+                          ],
+                        ),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.sports_score,
+                              size: 16,
+                              color: Colors.white60,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'goluri: ${ctrl.goalsForPlayer(p.id)} '
+                              '(${ctrl.goalsPerMatchForPlayer(p.id).toStringAsFixed(2)}/meci)',
+                            ),
+                          ],
+                        ),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.history,
+                              size: 16,
+                              color: Colors.white60,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'ultimul: ${_relativeDays(ctrl.lastMatchAtForPlayer(p.id))}',
+                            ),
+                          ],
+                        ),
+                        if (ctrl.mvpCountForPlayer(p.id) > 0)
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.star,
+                                size: 16,
+                                color: SimfTheme.amber,
+                              ),
+                              const SizedBox(width: 4),
+                              Text('${ctrl.mvpCountForPlayer(p.id)}'),
+                            ],
+                          ),
+                        if (ctrl.gkOfMatchCountForPlayer(p.id) > 0)
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.shield,
+                                size: 16,
+                                color: SimfTheme.amber,
+                              ),
+                              const SizedBox(width: 4),
+                              Text('${ctrl.gkOfMatchCountForPlayer(p.id)}'),
+                            ],
+                          ),
                       ],
                     ),
-                  ),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        Icons.sports_soccer,
-                        size: 16,
-                        color: Colors.white60,
-                      ),
-                      const SizedBox(width: 4),
-                      Text('meciuri: ${p.matchesPlayed}'),
-                    ],
-                  ),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        Icons.sports_score,
-                        size: 16,
-                        color: Colors.white60,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        'goluri: ${ctrl.goalsForPlayer(p.id)} '
-                        '(${ctrl.goalsPerMatchForPlayer(p.id).toStringAsFixed(2)}/meci)',
-                      ),
-                    ],
-                  ),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        Icons.history,
-                        size: 16,
-                        color: Colors.white60,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        'ultimul: ${_relativeDays(ctrl.lastMatchAtForPlayer(p.id))}',
-                      ),
-                    ],
-                  ),
-                  if (ctrl.mvpCountForPlayer(p.id) > 0)
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.star, size: 16, color: SimfTheme.amber),
-                        const SizedBox(width: 4),
-                        Text('${ctrl.mvpCountForPlayer(p.id)}'),
-                      ],
-                    ),
-                  if (ctrl.gkOfMatchCountForPlayer(p.id) > 0)
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.shield, size: 16, color: SimfTheme.amber),
-                        const SizedBox(width: 4),
-                        Text('${ctrl.gkOfMatchCountForPlayer(p.id)}'),
-                      ],
-                    ),
-                ],
-              ),
                     trailing: PopupMenuButton<_PlayerRowAction>(
-                tooltip: 'Acțiuni',
-                onSelected: (a) async {
-                  if (a == _PlayerRowAction.rename) {
-                    final nameCtrl = TextEditingController(text: p.name);
-                    final ok = await showDialog<bool>(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        title: const Text('Editează numele'),
-                        content: TextField(
-                          controller: nameCtrl,
-                          decoration: const InputDecoration(
-                            labelText: 'Nume',
-                            border: OutlineInputBorder(),
-                          ),
-                          textCapitalization: TextCapitalization.words,
-                          autofocus: true,
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx, false),
-                            child: const Text('Renunță'),
-                          ),
-                          FilledButton(
-                            onPressed: () => Navigator.pop(ctx, true),
-                            child: const Text('Salvează'),
-                          ),
-                        ],
-                      ),
-                    );
-                    final newName = nameCtrl.text;
-                    nameCtrl.dispose();
-                    if (ok == true && context.mounted) {
-                      await context.read<SimfController>().renamePlayer(
-                            player: p,
-                            newName: newName,
+                      tooltip: 'Acțiuni',
+                      onSelected: (a) async {
+                        if (a == _PlayerRowAction.rename) {
+                          final nameCtrl = TextEditingController(text: p.name);
+                          var permanentGk = p.isPermanentGk;
+                          final ok = await showDialog<bool>(
+                            context: context,
+                            builder: (ctx) => StatefulBuilder(
+                              builder: (ctx, setLocal) => AlertDialog(
+                                title: const Text('Editează jucător'),
+                                content: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    TextField(
+                                      controller: nameCtrl,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Nume',
+                                        border: OutlineInputBorder(),
+                                      ),
+                                      textCapitalization:
+                                          TextCapitalization.words,
+                                      autofocus: true,
+                                    ),
+                                    const SizedBox(height: 12),
+                                    CheckboxListTile(
+                                      value: permanentGk,
+                                      onChanged: (v) => setLocal(
+                                        () => permanentGk = v ?? false,
+                                      ),
+                                      title: const Text('Portar permanent'),
+                                      controlAffinity:
+                                          ListTileControlAffinity.leading,
+                                      contentPadding: EdgeInsets.zero,
+                                    ),
+                                  ],
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(ctx, false),
+                                    child: const Text('Renunță'),
+                                  ),
+                                  FilledButton(
+                                    onPressed: () => Navigator.pop(ctx, true),
+                                    child: const Text('Salvează'),
+                                  ),
+                                ],
+                              ),
+                            ),
                           );
-                    }
-                  }
-                  if (a == _PlayerRowAction.delete && context.mounted) {
-                    final sure = await showDialog<bool>(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        title: const Text('Ștergi jucătorul?'),
-                        content: Text('${p.name} va fi eliminat din lista locală.'),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx, false),
-                            child: const Text('Nu'),
+                          final newName = nameCtrl.text;
+                          // Delay dispose by one frame to avoid "used after disposed"
+                          // during dialog pop animation / final rebuild.
+                          await Future<void>.delayed(Duration.zero);
+                          nameCtrl.dispose();
+                          if (ok == true && context.mounted) {
+                            await context.read<SimfController>().updatePlayer(
+                              player: p,
+                              newName: newName,
+                              isPermanentGk: permanentGk,
+                            );
+                          }
+                        }
+                        if (a == _PlayerRowAction.delete && context.mounted) {
+                          final sure = await showDialog<bool>(
+                            context: context,
+                            builder: (ctx) => AlertDialog(
+                              title: const Text('Ștergi jucătorul?'),
+                              content: Text(
+                                '${p.name} va fi eliminat din lista locală.',
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(ctx, false),
+                                  child: const Text('Nu'),
+                                ),
+                                FilledButton(
+                                  onPressed: () => Navigator.pop(ctx, true),
+                                  child: const Text('Da'),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (sure == true && context.mounted) {
+                            await context.read<SimfController>().deletePlayer(
+                              p,
+                            );
+                          }
+                        }
+                      },
+                      itemBuilder: (context) => const [
+                        PopupMenuItem(
+                          value: _PlayerRowAction.rename,
+                          child: Row(
+                            children: [
+                              Icon(Icons.edit_outlined),
+                              SizedBox(width: 8),
+                              Text('Editează'),
+                            ],
                           ),
-                          FilledButton(
-                            onPressed: () => Navigator.pop(ctx, true),
-                            child: const Text('Da'),
+                        ),
+                        PopupMenuItem(
+                          value: _PlayerRowAction.delete,
+                          child: Row(
+                            children: [
+                              Icon(Icons.delete_outline),
+                              SizedBox(width: 8),
+                              Text('Șterge'),
+                            ],
                           ),
-                        ],
-                      ),
-                    );
-                    if (sure == true && context.mounted) {
-                      await context.read<SimfController>().deletePlayer(p);
-                    }
-                  }
-                },
-                itemBuilder: (context) => const [
-                  PopupMenuItem(
-                    value: _PlayerRowAction.rename,
-                    child: Row(
-                      children: [
-                        Icon(Icons.edit_outlined),
-                        SizedBox(width: 8),
-                        Text('Editează'),
+                        ),
                       ],
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: _PlayerRowAction.delete,
-                    child: Row(
-                      children: [
-                        Icon(Icons.delete_outline),
-                        SizedBox(width: 8),
-                        Text('Șterge'),
-                      ],
-                    ),
-                  ),
-                ],
                       icon: const Icon(Icons.more_vert),
                     ),
                   ),

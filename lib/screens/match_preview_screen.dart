@@ -9,7 +9,9 @@ import 'match_entry_screen.dart';
 
 /// Ecran intermediar: arată doar componența echipelor generate.
 class MatchPreviewScreen extends StatelessWidget {
-  const MatchPreviewScreen({super.key});
+  const MatchPreviewScreen({super.key, this.draftMatchId});
+
+  final String? draftMatchId;
 
   double _starsForPlayer({
     required Player player,
@@ -35,20 +37,18 @@ class MatchPreviewScreen extends StatelessWidget {
     }
 
     final ranking = RankingService();
-    final winPct = (ranking.winProbabilityTeamA(teamA: match.teamA, teamB: match.teamB) *
-            100)
-        .clamp(0, 100);
+    final winPct =
+        (ranking.winProbabilityTeamA(teamA: match.teamA, teamB: match.teamB) *
+                100)
+            .clamp(0, 100);
 
     final all = [...match.teamA, ...match.teamB];
     final skills = all.map((p) => p.conservativeSkill).toList(growable: false);
     final minSkill = skills.reduce((a, b) => a < b ? a : b);
     final maxSkill = skills.reduce((a, b) => a > b ? a : b);
 
-    double stars(Player p) => _starsForPlayer(
-          player: p,
-          minSkill: minSkill,
-          maxSkill: maxSkill,
-        );
+    double stars(Player p) =>
+        _starsForPlayer(player: p, minSkill: minSkill, maxSkill: maxSkill);
 
     int teamScorePct(List<Player> team) {
       if (team.isEmpty) return 0;
@@ -62,7 +62,9 @@ class MatchPreviewScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Echipe generate'),
+        title: Text(
+          ctrl.lastMatchIsManual ? 'Echipe alese manual' : 'Echipe generate',
+        ),
         actions: [
           Center(
             child: Padding(
@@ -111,9 +113,17 @@ class MatchPreviewScreen extends StatelessWidget {
                   Expanded(
                     child: OutlinedButton.icon(
                       icon: const Icon(Icons.refresh),
-                      label: const Text('Generează iar'),
+                      label: Text(
+                        ctrl.lastMatchIsManual
+                            ? 'Înapoi la selecție'
+                            : 'Generează iar',
+                      ),
                       onPressed: () {
-                        ctrl.generateTeams();
+                        if (ctrl.lastMatchIsManual) {
+                          Navigator.of(context).pop();
+                        } else {
+                          ctrl.generateTeams();
+                        }
                       },
                     ),
                   ),
@@ -125,7 +135,8 @@ class MatchPreviewScreen extends StatelessWidget {
                       onPressed: () {
                         Navigator.of(context).push(
                           MaterialPageRoute<void>(
-                            builder: (_) => const MatchEntryScreen(),
+                            builder: (_) =>
+                                MatchEntryScreen(existingMatchId: draftMatchId),
                           ),
                         );
                       },
@@ -200,8 +211,10 @@ class _TeamPreviewPanel extends StatelessWidget {
                   ),
                 ),
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.black.withValues(alpha: 0.18),
                     borderRadius: BorderRadius.circular(999),
@@ -239,7 +252,9 @@ class _TeamPreviewPanel extends StatelessWidget {
                       children: _buildStars(stars),
                     ),
                   ),
-                  subtitle: p.isPermanentGk ? const Text('Portar permanent') : null,
+                  subtitle: p.isPermanentGk
+                      ? const Text('Portar permanent')
+                      : null,
                 );
               },
             ),
@@ -249,4 +264,3 @@ class _TeamPreviewPanel extends StatelessWidget {
     );
   }
 }
-

@@ -198,8 +198,9 @@ FROM match_player_stats;
         where: 'LOWER(name) LIKE ?',
         whereArgs: ['demo %'],
       );
-      final demoIds =
-          demoPlayers.map((r) => r['id']! as String).toList(growable: false);
+      final demoIds = demoPlayers
+          .map((r) => r['id']! as String)
+          .toList(growable: false);
       if (demoIds.isEmpty) return 0;
 
       // Matches care conțin demo players.
@@ -246,36 +247,28 @@ FROM match_player_stats;
     required bool synced,
   }) async {
     await _db.transaction((txn) async {
-      await txn.insert(
-        'matches',
-        {
-          'id': match.id,
-          'created_at': match.createdAt.toUtc().toIso8601String(),
-          'score_a': match.scoreA,
-          'score_b': match.scoreB,
-          'duration_minutes': match.durationMinutes,
-          'updated_at': (match.updatedAt ?? match.createdAt)
-              .toUtc()
-              .toIso8601String(),
-          'synced': synced ? 1 : 0,
-        },
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+      await txn.insert('matches', {
+        'id': match.id,
+        'created_at': match.createdAt.toUtc().toIso8601String(),
+        'score_a': match.scoreA,
+        'score_b': match.scoreB,
+        'duration_minutes': match.durationMinutes,
+        'updated_at': (match.updatedAt ?? match.createdAt)
+            .toUtc()
+            .toIso8601String(),
+        'synced': synced ? 1 : 0,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
       for (final s in stats) {
-        await txn.insert(
-          'match_player_stats',
-          {
-            'match_id': match.id,
-            'player_id': s.playerId,
-            'team': s.team.dbValue,
-            'goals': s.goals,
-            'is_rotation_gk': s.isRotationGk ? 1 : 0,
-            'received_mvp_vote': s.receivedMvpVote ? 1 : 0,
-            'received_gk_vote': s.receivedGkVote ? 1 : 0,
-            'synced': synced ? 1 : 0,
-          },
-          conflictAlgorithm: ConflictAlgorithm.replace,
-        );
+        await txn.insert('match_player_stats', {
+          'match_id': match.id,
+          'player_id': s.playerId,
+          'team': s.team.dbValue,
+          'goals': s.goals,
+          'is_rotation_gk': s.isRotationGk ? 1 : 0,
+          'received_mvp_vote': s.receivedMvpVote ? 1 : 0,
+          'received_gk_vote': s.receivedGkVote ? 1 : 0,
+          'synced': synced ? 1 : 0,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
     });
   }
@@ -293,34 +286,28 @@ FROM match_player_stats;
         whereArgs: [match.id],
       );
       await txn.delete('matches', where: 'id = ?', whereArgs: [match.id]);
-      await txn.insert(
-        'matches',
-        {
-          'id': match.id,
-          'created_at': match.createdAt.toUtc().toIso8601String(),
-          'score_a': match.scoreA,
-          'score_b': match.scoreB,
-          'duration_minutes': match.durationMinutes,
-          'updated_at': (match.updatedAt ?? match.createdAt)
-              .toUtc()
-              .toIso8601String(),
-          'synced': synced ? 1 : 0,
-        },
-      );
+      await txn.insert('matches', {
+        'id': match.id,
+        'created_at': match.createdAt.toUtc().toIso8601String(),
+        'score_a': match.scoreA,
+        'score_b': match.scoreB,
+        'duration_minutes': match.durationMinutes,
+        'updated_at': (match.updatedAt ?? match.createdAt)
+            .toUtc()
+            .toIso8601String(),
+        'synced': synced ? 1 : 0,
+      });
       for (final s in stats) {
-        await txn.insert(
-          'match_player_stats',
-          {
-            'match_id': match.id,
-            'player_id': s.playerId,
-            'team': s.team.dbValue,
-            'goals': s.goals,
-            'is_rotation_gk': s.isRotationGk ? 1 : 0,
-            'received_mvp_vote': s.receivedMvpVote ? 1 : 0,
-            'received_gk_vote': s.receivedGkVote ? 1 : 0,
-            'synced': synced ? 1 : 0,
-          },
-        );
+        await txn.insert('match_player_stats', {
+          'match_id': match.id,
+          'player_id': s.playerId,
+          'team': s.team.dbValue,
+          'goals': s.goals,
+          'is_rotation_gk': s.isRotationGk ? 1 : 0,
+          'received_mvp_vote': s.receivedMvpVote ? 1 : 0,
+          'received_gk_vote': s.receivedGkVote ? 1 : 0,
+          'synced': synced ? 1 : 0,
+        });
       }
     });
   }
@@ -345,10 +332,42 @@ FROM match_player_stats;
   Future<List<Match>> getUnsyncedMatches() async {
     final rows = await _db.query(
       'matches',
-      where: 'synced = 0',
+      // Nu sincronizăm draft-urile (scor necompletat).
+      where: 'synced = 0 AND score_a >= 0 AND score_b >= 0',
       orderBy: 'created_at ASC',
     );
     return rows.map(_matchFromTableRow).toList(growable: false);
+  }
+
+  Future<Match?> getMatchById(String matchId) async {
+    final rows = await _db.query(
+      'matches',
+      where: 'id = ?',
+      whereArgs: [matchId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return _matchFromTableRow(rows.first);
+  }
+
+  Future<void> updateMatchScores({
+    required String matchId,
+    required int scoreA,
+    required int scoreB,
+    required DateTime updatedAt,
+    required bool synced,
+  }) async {
+    await _db.update(
+      'matches',
+      {
+        'score_a': scoreA,
+        'score_b': scoreB,
+        'updated_at': updatedAt.toUtc().toIso8601String(),
+        'synced': synced ? 1 : 0,
+      },
+      where: 'id = ?',
+      whereArgs: [matchId],
+    );
   }
 
   Future<List<({Match match, bool synced})>> getAllMatchesWithSync() async {
@@ -403,7 +422,7 @@ FROM match_player_stats;
 
   /// Istoric meciuri pentru un jucător, paginat (ORDER BY meci desc).
   Future<List<({Match match, MatchPlayerStats stat, bool synced})>>
-      getPlayerMatchHistoryPage({
+  getPlayerMatchHistoryPage({
     required String playerId,
     required int limit,
     required int offset,
@@ -452,13 +471,11 @@ LIMIT ? OFFSET ?
   }
 
   Future<Map<String, int>> getGoalsByPlayerId() async {
-    final rows = await _db.rawQuery(
-      '''
+    final rows = await _db.rawQuery('''
 SELECT player_id, COALESCE(SUM(goals), 0) AS goals_sum
 FROM match_player_stats
 GROUP BY player_id
-''',
-    );
+''');
     final out = <String, int>{};
     for (final r in rows) {
       final id = r['player_id'] as String;
@@ -471,15 +488,20 @@ GROUP BY player_id
   /// Agregate per jucător, din istoricul local de meciuri.
   ///
   /// Returnează doar jucătorii care apar în `match_player_stats`.
-  Future<Map<String, ({
-    int goals,
-    int matches,
-    int mvpCount,
-    int gkOfMatchCount,
-    DateTime? lastMatchAt,
-  })>> getPlayerAggregates() async {
-    final rows = await _db.rawQuery(
-      '''
+  Future<
+    Map<
+      String,
+      ({
+        int goals,
+        int matches,
+        int mvpCount,
+        int gkOfMatchCount,
+        DateTime? lastMatchAt,
+      })
+    >
+  >
+  getPlayerAggregates() async {
+    final rows = await _db.rawQuery('''
 SELECT
   s.player_id AS player_id,
   COALESCE(SUM(s.goals), 0) AS goals_sum,
@@ -490,16 +512,19 @@ SELECT
 FROM match_player_stats s
 LEFT JOIN matches m ON m.id = s.match_id
 GROUP BY s.player_id
-''',
-    );
+''');
 
-    final out = <String, ({
-      int goals,
-      int matches,
-      int mvpCount,
-      int gkOfMatchCount,
-      DateTime? lastMatchAt,
-    })>{};
+    final out =
+        <
+          String,
+          ({
+            int goals,
+            int matches,
+            int mvpCount,
+            int gkOfMatchCount,
+            DateTime? lastMatchAt,
+          })
+        >{};
 
     for (final r in rows) {
       final id = r['player_id'] as String;
@@ -536,11 +561,10 @@ GROUP BY s.player_id
     required String alias,
     required String playerId,
   }) async {
-    await _db.insert(
-      'player_aliases',
-      {'alias': alias, 'player_id': playerId},
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await _db.insert('player_aliases', {
+      'alias': alias,
+      'player_id': playerId,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Match _matchFromTableRow(Map<String, Object?> r) {
@@ -568,14 +592,14 @@ GROUP BY s.player_id
   }
 
   Map<String, Object?> _playerToRow(Player p) => {
-        'id': p.id,
-        'name': p.name,
-        'mu': p.mu,
-        'sigma': p.sigma,
-        'is_permanent_gk': p.isPermanentGk ? 1 : 0,
-        'matches_played': p.matchesPlayed,
-        'updated_at': p.updatedAt?.toUtc().toIso8601String(),
-      };
+    'id': p.id,
+    'name': p.name,
+    'mu': p.mu,
+    'sigma': p.sigma,
+    'is_permanent_gk': p.isPermanentGk ? 1 : 0,
+    'matches_played': p.matchesPlayed,
+    'updated_at': p.updatedAt?.toUtc().toIso8601String(),
+  };
 
   Player _rowToPlayer(Map<String, Object?> row) {
     return Player(
@@ -589,5 +613,18 @@ GROUP BY s.player_id
           ? DateTime.tryParse(row['updated_at'] as String)
           : null,
     );
+  }
+
+  /// Șterge TOATE datele locale (dev/reset).
+  ///
+  /// Notă: nu schimbă schema / versiunea DB, doar golește tabelele.
+  Future<void> clearAllData() async {
+    await _db.transaction((txn) async {
+      // Ordine importantă (FK): stats -> matches -> restul.
+      await txn.delete('match_player_stats');
+      await txn.delete('matches');
+      await txn.delete('player_aliases');
+      await txn.delete('players');
+    });
   }
 }

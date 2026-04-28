@@ -10,10 +10,7 @@ import '../theme/simf_theme.dart';
 
 /// Stare editabilă pentru un jucător în ecranul post-meci (tally + toggles).
 class _LineStat {
-  _LineStat({
-    required this.player,
-    required this.team,
-  });
+  _LineStat({required this.player, required this.team});
 
   final Player player;
   final MatchTeam team;
@@ -25,7 +22,9 @@ class _LineStat {
 
 /// Split-screen: stânga echipa A (roșu), dreapta echipa B (albastru).
 class MatchEntryScreen extends StatefulWidget {
-  const MatchEntryScreen({super.key});
+  const MatchEntryScreen({super.key, this.existingMatchId});
+
+  final String? existingMatchId;
 
   @override
   State<MatchEntryScreen> createState() => _MatchEntryScreenState();
@@ -98,9 +97,9 @@ class _MatchEntryScreenState extends State<MatchEntryScreen> {
     final ctrl = context.read<SimfController>();
     final match = ctrl.lastMatch;
     if (match == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Nu există echipe active.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Nu există echipe active.')));
       return;
     }
 
@@ -121,11 +120,20 @@ class _MatchEntryScreenState extends State<MatchEntryScreen> {
         );
       }
 
-      await ctrl.finalizeMatch(
-        scoreA: _scoreA,
-        scoreB: _scoreB,
-        stats: stats,
-      );
+      if (widget.existingMatchId != null) {
+        await ctrl.finalizeExistingMatch(
+          matchId: widget.existingMatchId!,
+          scoreA: _scoreA,
+          scoreB: _scoreB,
+          stats: stats,
+        );
+      } else {
+        await ctrl.finalizeMatch(
+          scoreA: _scoreA,
+          scoreB: _scoreB,
+          stats: stats,
+        );
+      }
 
       if (!mounted) return;
       final goHistory = await showDialog<bool>(
@@ -151,9 +159,7 @@ class _MatchEntryScreenState extends State<MatchEntryScreen> {
       Navigator.of(context).popUntil((route) => route.isFirst);
       if (goHistory == true && mounted) {
         Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => const MatchHistoryScreen(),
-          ),
+          MaterialPageRoute<void>(builder: (_) => const MatchHistoryScreen()),
         );
       } else if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -174,15 +180,15 @@ class _MatchEntryScreenState extends State<MatchEntryScreen> {
       }
     } on SimfException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.message)),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.message)));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Eroare: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Eroare: $e')));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -198,18 +204,14 @@ class _MatchEntryScreenState extends State<MatchEntryScreen> {
       );
     }
 
-    final winPct = (_ranking.winProbabilityTeamA(
-              teamA: match.teamA,
-              teamB: match.teamB,
-            ) *
-            100)
-        .clamp(0.0, 100.0)
-        .toDouble();
+    final winPct =
+        (_ranking.winProbabilityTeamA(teamA: match.teamA, teamB: match.teamB) *
+                100)
+            .clamp(0.0, 100.0)
+            .toDouble();
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Introducere scor'),
-      ),
+      appBar: AppBar(title: const Text('Introducere scor')),
       body: Column(
         children: [
           _WinChanceChips(winPctA: winPct),
@@ -263,8 +265,7 @@ class _MatchEntryScreenState extends State<MatchEntryScreen> {
               child: SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
-                  onPressed:
-                      (_busy || !_goalsMatchScore) ? null : _submit,
+                  onPressed: (_busy || !_goalsMatchScore) ? null : _submit,
                   icon: _busy
                       ? const SizedBox(
                           width: 22,
@@ -383,17 +384,17 @@ class _TeamPanel extends StatelessWidget {
                 title,
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.3,
-                      color: Colors.white,
-                      shadows: const [
-                        Shadow(
-                          blurRadius: 6,
-                          color: Colors.black38,
-                          offset: Offset(0, 1),
-                        ),
-                      ],
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.3,
+                  color: Colors.white,
+                  shadows: const [
+                    Shadow(
+                      blurRadius: 6,
+                      color: Colors.black38,
+                      offset: Offset(0, 1),
                     ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -415,8 +416,7 @@ class _TeamPanel extends StatelessWidget {
                   accent: color,
                   onChanged: onChanged,
                   onMvp: mvpEnabled ? () => onMvp(line) : null,
-                  onGkOfMatch:
-                      line.rotationGk ? () => onGkOfMatch(line) : null,
+                  onGkOfMatch: line.rotationGk ? () => onGkOfMatch(line) : null,
                 );
               },
             ),
@@ -453,10 +453,7 @@ class _PlayerRow extends StatelessWidget {
       child: DecoratedBox(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: accent.withValues(alpha: 0.38),
-            width: 0.9,
-          ),
+          border: Border.all(color: accent.withValues(alpha: 0.38), width: 0.9),
           gradient: LinearGradient(
             colors: [
               accent.withValues(alpha: 0.14),
@@ -489,83 +486,88 @@ class _PlayerRow extends StatelessWidget {
                       ),
                     ),
                   ),
-                const Icon(Icons.sports_soccer, size: iconSize, color: Colors.white70),
-                const SizedBox(width: 2),
-                IconButton(
-                  tooltip: 'Gol -1',
-                  constraints: const BoxConstraints.tightFor(
-                    width: btnW,
-                    height: btnH,
+                  const Icon(
+                    Icons.sports_soccer,
+                    size: iconSize,
+                    color: Colors.white70,
                   ),
-                  padding: EdgeInsets.zero,
-                  visualDensity: VisualDensity.compact,
-                  onPressed: () {
-                    if (line.goals > 0) line.goals--;
-                    onChanged();
-                  },
-                  icon: const Icon(Icons.remove_circle_outline, size: iconSize),
-                ),
-                SizedBox(
-                  width: 22,
-                  child: Text(
-                    '${line.goals}',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w800,
-                      color: accent,
-                      fontSize: 16,
-                    ),
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'Gol +1',
-                  constraints: const BoxConstraints.tightFor(
-                    width: btnW,
-                    height: btnH,
-                  ),
-                  padding: EdgeInsets.zero,
-                  visualDensity: VisualDensity.compact,
-                  onPressed: () {
-                    line.goals++;
-                    onChanged();
-                  },
-                  icon: Icon(Icons.add_circle, size: iconSize, color: accent),
-                ),
-                if (!p.isPermanentGk)
+                  const SizedBox(width: 2),
                   IconButton(
-                    tooltip: 'Portar rotație',
+                    tooltip: 'Gol -1',
+                    constraints: const BoxConstraints.tightFor(
+                      width: btnW,
+                      height: btnH,
+                    ),
+                    padding: EdgeInsets.zero,
+                    visualDensity: VisualDensity.compact,
                     onPressed: () {
-                      line.rotationGk = !line.rotationGk;
-                      if (!line.rotationGk) line.gkOfMatch = false;
+                      if (line.goals > 0) line.goals--;
                       onChanged();
                     },
-                    icon: Icon(
-                      Icons.sports_handball,
-                      color: line.rotationGk ? accent : Colors.grey,
+                    icon: const Icon(
+                      Icons.remove_circle_outline,
+                      size: iconSize,
                     ),
                   ),
-                IconButton(
-                  tooltip: line.rotationGk
-                      ? 'Portarul meciului (1 singur)'
-                      : 'Bifează mai întâi portar rotație',
-                  onPressed: line.rotationGk ? onGkOfMatch : null,
-                  icon: Icon(
-                    Icons.shield_outlined,
-                    color: line.gkOfMatch ? Colors.amber : Colors.white38,
+                  SizedBox(
+                    width: 22,
+                    child: Text(
+                      '${line.goals}',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: accent,
+                        fontSize: 16,
+                      ),
+                    ),
                   ),
-                ),
-                IconButton(
-                  tooltip: 'MVP (max. 1 per echipă)',
-                  onPressed: onMvp,
-                  icon: Icon(
-                    line.mvp ? Icons.star : Icons.star_border,
-                    color: line.mvp
-                        ? Colors.amber
-                        : Colors.grey,
+                  IconButton(
+                    tooltip: 'Gol +1',
+                    constraints: const BoxConstraints.tightFor(
+                      width: btnW,
+                      height: btnH,
+                    ),
+                    padding: EdgeInsets.zero,
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () {
+                      line.goals++;
+                      onChanged();
+                    },
+                    icon: Icon(Icons.add_circle, size: iconSize, color: accent),
                   ),
-                ),
-              ],
-            ),
+                  if (!p.isPermanentGk)
+                    IconButton(
+                      tooltip: 'Portar rotație',
+                      onPressed: () {
+                        line.rotationGk = !line.rotationGk;
+                        if (!line.rotationGk) line.gkOfMatch = false;
+                        onChanged();
+                      },
+                      icon: Icon(
+                        Icons.sports_handball,
+                        color: line.rotationGk ? accent : Colors.grey,
+                      ),
+                    ),
+                  IconButton(
+                    tooltip: line.rotationGk
+                        ? 'Portarul meciului (1 singur)'
+                        : 'Bifează mai întâi portar rotație',
+                    onPressed: line.rotationGk ? onGkOfMatch : null,
+                    icon: Icon(
+                      Icons.shield_outlined,
+                      color: line.gkOfMatch ? Colors.amber : Colors.white38,
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'MVP (max. 1 per echipă)',
+                    onPressed: onMvp,
+                    icon: Icon(
+                      line.mvp ? Icons.star : Icons.star_border,
+                      color: line.mvp ? Colors.amber : Colors.grey,
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
         ),
@@ -598,13 +600,28 @@ class _ScoreBar extends StatelessWidget {
       return Expanded(
         child: Column(
           children: [
-            Text(label, style: TextStyle(color: color, fontWeight: FontWeight.bold)),
+            Text(
+              label,
+              style: TextStyle(color: color, fontWeight: FontWeight.bold),
+            ),
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                IconButton(onPressed: () => onChange((value - 1).clamp(0, 99)), icon: const Icon(Icons.remove)),
-                Text('$value', style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
-                IconButton(onPressed: () => onChange((value + 1).clamp(0, 99)), icon: const Icon(Icons.add)),
+                IconButton(
+                  onPressed: () => onChange((value - 1).clamp(0, 99)),
+                  icon: const Icon(Icons.remove),
+                ),
+                Text(
+                  '$value',
+                  style: const TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => onChange((value + 1).clamp(0, 99)),
+                  icon: const Icon(Icons.add),
+                ),
               ],
             ),
           ],

@@ -109,9 +109,9 @@ class SupabaseService {
     if (players.isEmpty) return;
     _requireClient();
     try {
-      await _client!.from('players').upsert(
-            players.map((p) => p.toJson()).toList(),
-          );
+      await _client!
+          .from('players')
+          .upsert(players.map((p) => p.toJson()).toList());
     } on PostgrestException catch (e) {
       throw SimfException(
         'Nu s-au putut sincroniza jucătorii în Supabase: ${_pgDetail(e)}',
@@ -148,9 +148,9 @@ class SupabaseService {
     }
     if (stats.isEmpty) return;
     try {
-      await _client!.from('match_player_stats').upsert(
-            stats.map((s) => s.toJson()).toList(),
-          );
+      await _client!
+          .from('match_player_stats')
+          .upsert(stats.map((s) => s.toJson()).toList());
     } on PostgrestException catch (e) {
       await _client!.from('matches').delete().eq('id', match.id);
       throw SimfException(
@@ -191,6 +191,26 @@ class SupabaseService {
     } on PostgrestException catch (e) {
       throw SimfException(
         'Eroare la citirea statisticilor de meci din Supabase: ${_pgDetail(e)}',
+        e,
+      );
+    }
+  }
+
+  /// Mută toate rândurile de stats de pe un player pe altul (cleanup dubluri).
+  Future<void> reassignMatchPlayerStatsPlayerId({
+    required String fromPlayerId,
+    required String toPlayerId,
+  }) async {
+    _requireClient();
+    if (fromPlayerId == toPlayerId) return;
+    try {
+      await _client!
+          .from('match_player_stats')
+          .update({'player_id': toPlayerId})
+          .eq('player_id', fromPlayerId);
+    } on PostgrestException catch (e) {
+      throw SimfException(
+        'Nu am putut reasigna statisticile de meci pentru cleanup: ${_pgDetail(e)}',
         e,
       );
     }

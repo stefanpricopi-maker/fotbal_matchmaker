@@ -20,6 +20,13 @@ class Match {
   final int durationMinutes;
   final DateTime? updatedAt;
 
+  /// Meci “draft” (salvat fără scor).
+  ///
+  /// Folosit doar local (SQLite). În Supabase nu urcăm meciuri draft.
+  bool get isDraft => scoreA < 0 || scoreB < 0;
+
+  String get scoreLabel => isDraft ? '—' : '$scoreA - $scoreB';
+
   Match copyWith({
     String? id,
     DateTime? createdAt,
